@@ -70,7 +70,7 @@ class FPN(BaseModule):
                  num_outs,
                  start_level=0,
                  end_level=-1,
-                 add_extra_convs=False,
+                 add_extra_convs=False,  # config: add_extra_convs='on_input'
                  extra_convs_on_inputs=True,
                  relu_before_extra_convs=False,
                  no_norm_on_lateral=False,

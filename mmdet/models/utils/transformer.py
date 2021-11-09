@@ -719,7 +719,7 @@ class DynamicConv(BaseModule):
         self.in_channels = in_channels
         self.feat_channels = feat_channels
         self.out_channels_raw = out_channels
-        self.input_feat_shape = input_feat_shape
+        self.input_feat_shape = input_feat_shape  # 根据dict cfg == 7
         self.with_proj = with_proj
         self.act_cfg = act_cfg
         self.norm_cfg = norm_cfg
@@ -755,13 +755,16 @@ class DynamicConv(BaseModule):
             Tensor: The output feature has shape
             (num_all_proposals, out_channels).
         """
-        num_proposals = param_feature.size(0)
+        # param_feature == q_{t-1}^{*}
+        num_proposals = param_feature.size(0)  # batch_size*num_proposals
+        # input_feature： num_all_proposals == batch_size*num_proposals
+        # input_feature == x_{t}^{box}
         input_feature = input_feature.view(num_proposals, self.in_channels,
                                            self.input_feat_shape**2).permute(2, 0, 1)
 
         input_feature = input_feature.permute(1, 0, 2)
         parameters = self.dynamic_layer(param_feature)
-
+        # TODO 需要打印看看 怎么构成的卷积
         param_in = parameters[:, :self.num_params_in].view(
             -1, self.in_channels, self.feat_channels)
         param_out = parameters[:, -self.num_params_out:].view(

@@ -151,22 +151,30 @@ class QueryRoIHead(CascadeRoIHead):
                       tensor has shape (num_proposal, 4). The last
                       dimension 4 represents [tl_x, tl_y, br_x, br_y].
         """
-        num_imgs = len(img_metas)
+        num_imgs = len(img_metas)  # batch_size
         bbox_roi_extractor = self.bbox_roi_extractor[stage]
         bbox_head = self.bbox_head[stage]
+        # TODO 上面写的rois是(num_proposal, 5)，应该是batch*num_proposal 需要打印看看
+        # bbox_roi_extractor.num_inputs: 应该是 == 4  ( featmap_strides=[4, 8, 16, 32]
+        # x: 比如[(B, 256, 200, 200), (B, 256, 100, 100), (B, 256, 50, 50), (B, 256, 25, 25)]
+        # csdn似乎有误，返回值bbox_feats应该是(batch * num_proposals, 256, 7, 7) （结合dii_head.py参数文档）
         bbox_feats = bbox_roi_extractor(x[:bbox_roi_extractor.num_inputs],
-                                        rois)
+                                        rois)  # 前者为x^{FPN}，后者为b_{t-1}
+
+        # 原来的object_feats: (batch_size, num_proposals, proposal_feature_channel)
+        # 对应上一阶段的object query，也即q_{t-1}
+        # 返回的object_feats: (batch_size, num_proposal, feature_dimensions)
         cls_score, bbox_pred, object_feats, attn_feats = bbox_head(bbox_feats,
                                                        object_feats)
         proposal_list = self.bbox_head[stage].refine_bboxes(
             rois,
-            rois.new_zeros(len(rois)),  # dummy arg
+            rois.new_zeros(len(rois)),  # dummy arg 意思是"虚拟/伪参数"
             bbox_pred.view(-1, bbox_pred.size(-1)),
             [rois.new_zeros(object_feats.size(1)) for _ in range(num_imgs)],
             img_metas)
         bbox_results = dict(
             cls_score=cls_score,
-            decode_bbox_pred=torch.cat(proposal_list),
+            decode_bbox_pred=torch.cat(proposal_list),  # TODO 猜测是(batch, num_proposals, 4)
             object_feats=object_feats,
             attn_feats=attn_feats,
             # detach then use it in label assign
@@ -248,19 +256,21 @@ class QueryRoIHead(CascadeRoIHead):
             dict[str, Tensor]: a dictionary of loss components of all stage.
         """
 
-        num_imgs = len(img_metas)
+        num_imgs = len(img_metas)  # batch
         num_proposals = proposal_boxes.size(1)
         imgs_whwh = imgs_whwh.repeat(1, num_proposals, 1)
         all_stage_bbox_results = []
-        proposal_list = [proposal_boxes[i] for i in range(len(proposal_boxes))]
-        object_feats = proposal_features
+        # proposal_boxes: (batch_size ,num_proposals, 4)
+        # proposal_list是构造出了len为batch_size，每个元素为(num_proposals, 4)的列表
+        proposal_list = [proposal_boxes[i] for i in range(len(proposal_boxes))]  # len: batch_size
+        object_feats = proposal_features  # (batch_size, num_proposals, proposal_feature_channel)
         all_stage_loss = {}
         for stage in range(self.num_stages):
-            rois = bbox2roi(proposal_list)
+            rois = bbox2roi(proposal_list)  # (batch * num_proposals, 5) 5: img_index, x1, y1, x2, y2
             bbox_results = self._bbox_forward(stage, x, rois, object_feats,
                                               img_metas)
             all_stage_bbox_results.append(bbox_results)
-            if gt_bboxes_ignore is None:
+            if gt_bboxes_ignore is None:  # 执行
                 # TODO support ignore
                 gt_bboxes_ignore = [None for _ in range(num_imgs)]
             sampling_results = []
@@ -272,7 +282,7 @@ class QueryRoIHead(CascadeRoIHead):
                 assign_result = self.bbox_assigner[stage].assign(
                     normolize_bbox_ccwh, cls_pred_list[i], gt_bboxes[i],
                     gt_labels[i], img_metas[i])
-                sampling_result = self.bbox_sampler[stage].sample(
+                sampling_result = self.bbox_Crossover Learning sampler[stage].sample(
                     assign_result, proposal_list[i], gt_bboxes[i])
                 sampling_results.append(sampling_result)
             bbox_targets = self.bbox_head[stage].get_targets(

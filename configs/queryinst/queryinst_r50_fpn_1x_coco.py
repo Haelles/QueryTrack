@@ -32,6 +32,7 @@ model = dict(
         num_stages=num_stages,
         stage_loss_weights=[1] * num_stages,
         proposal_feature_channel=256,
+        # bbox_roi_extractor这个dict用在CascadeRoIHead.init_bbox_head中(实现父类BaseRoIHead的抽象方法)
         bbox_roi_extractor=dict(
             type='SingleRoIExtractor',
             roi_layer=dict(type='RoIAlign', output_size=7, sampling_ratio=2),

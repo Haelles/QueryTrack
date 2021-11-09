@@ -47,17 +47,20 @@ class SingleRoIExtractor(BaseRoIExtractor):
         Returns:
             Tensor: Level index (0-based) of each RoI, shape (k, )
         """
+        # rois: (batch * num_proposals, 5)
         scale = torch.sqrt(
             (rois[:, 3] - rois[:, 1]) * (rois[:, 4] - rois[:, 2]))
         target_lvls = torch.floor(torch.log2(scale / self.finest_scale + 1e-6))
-        target_lvls = target_lvls.clamp(min=0, max=num_levels - 1).long()
+        target_lvls = target_lvls.clamp(min=0, max=num_levels - 1).long()  # 64位整型
         return target_lvls
 
     @force_fp32(apply_to=('feats', ), out_fp16=True)
     def forward(self, feats, rois, roi_scale_factor=None):
         """Forward function."""
+        # feats: list 比如[(B, 256, 200, 200), (B, 256, 100, 100), (B, 256, 50, 50), (B, 256, 25, 25)]
+        # rois: (batch * num_proposals, 5)
         out_size = self.roi_layers[0].output_size
-        num_levels = len(feats)
+        num_levels = len(feats)  # == 4
         expand_dims = (-1, self.out_channels * out_size[0] * out_size[1])
         if torch.onnx.is_in_onnx_export():
             # Work around to export mask-rcnn to onnx
@@ -72,18 +75,22 @@ class SingleRoIExtractor(BaseRoIExtractor):
         if torch.__version__ == 'parrots':
             roi_feats.requires_grad = True
 
-        if num_levels == 1:
+        if num_levels == 1:  # default == false 不执行
             if len(rois) == 0:
                 return roi_feats
             return self.roi_layers[0](feats[0], rois)
-
+        # rois: (batch * num_proposals, 5)
+        # target_lvls (batch * num_proposals, ) 看起来是一个0-3的index 一维张量序列
+        # TODO 需要打印看看
         target_lvls = self.map_roi_levels(rois, num_levels)
 
-        if roi_scale_factor is not None:
+        if roi_scale_factor is not None:  # default is None 不执行
             rois = self.roi_rescale(rois, roi_scale_factor)
 
-        for i in range(num_levels):
-            mask = target_lvls == i
+        for i in range(num_levels):  # 4
+            # TODO 需要打印看看
+            # mask:
+            mask = target_lvls == i  # 获得当前level需要用到的region proposal坐标
             if torch.onnx.is_in_onnx_export():
                 # To keep all roi_align nodes exported to onnx
                 # and skip nonzero op
@@ -93,9 +100,11 @@ class SingleRoIExtractor(BaseRoIExtractor):
                 roi_feats_t *= mask
                 roi_feats += roi_feats_t
                 continue
-            inds = mask.nonzero(as_tuple=False).squeeze(1)
-            if inds.numel() > 0:
+            inds = mask.nonzero(as_tuple=False).squeeze(1)  # 去掉多余的维度，变成一维的
+            if inds.numel() > 0:  # 返回数组中元素的个数
                 rois_ = rois[inds]
+                # rois_ (n, 5) n为这个level要用到的region proposal坐标数
+                # feats[i] e.g. (B, 256, 200, 200) 这个level的特征
                 roi_feats_t = self.roi_layers[i](feats[i], rois_)
                 roi_feats[inds] = roi_feats_t
             else:
@@ -108,4 +117,5 @@ class SingleRoIExtractor(BaseRoIExtractor):
                 roi_feats += sum(
                     x.view(-1)[0]
                     for x in self.parameters()) * 0. + feats[i].sum() * 0.
+        # TODO 需要打印看看，应该是(batch * num_proposals, 256, 7, 7) ; dict: output_size=7
         return roi_feats

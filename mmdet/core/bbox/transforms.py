@@ -67,6 +67,7 @@ def bbox2roi(bbox_list):
     """
     rois_list = []
     for img_id, bboxes in enumerate(bbox_list):
+        # bboxes.shape: (num_proposals, 4)
         if bboxes.size(0) > 0:
             img_inds = bboxes.new_full((bboxes.size(0), 1), img_id)
             rois = torch.cat([img_inds, bboxes[:, :4]], dim=-1)

@@ -477,18 +477,19 @@ class BBoxHead(BaseModule):
                 rois[:, 0] == i, as_tuple=False).squeeze(dim=1)
             num_rois = inds.numel()
 
-            bboxes_ = rois[inds, 1:]
-            label_ = labels[inds]
-            bbox_pred_ = bbox_preds[inds]
+            bboxes_ = rois[inds, 1:]  # (n, 4)
+            label_ = labels[inds]  # (batch*n, 5) --> 取出符合要求的部分为(n,  5)
+            bbox_pred_ = bbox_preds[inds]  # (n*bs, 4) --> (n, 4)
             img_meta_ = img_metas[i]
-            pos_is_gts_ = pos_is_gts[i]
+            pos_is_gts_ = pos_is_gts[i]  # 取出列表中元素，元素为(num_proposals,) type == tensor
 
             bboxes = self.regress_by_class(bboxes_, label_, bbox_pred_,
-                                           img_meta_)
+                                           img_meta_)  # 返回真实坐标 也即从dx, dy --> x1, y1
 
             # filter gt bboxes
-            pos_keep = 1 - pos_is_gts_
-            keep_inds = pos_is_gts_.new_ones(num_rois)
+            # TODO 需要打印看看 这里可能出现num_proposals > num_rois ?
+            pos_keep = 1 - pos_is_gts_  # (num_proposals,) 实际上全是1
+            keep_inds = pos_is_gts_.new_ones(num_rois)  # (num_rois, )
             keep_inds[:len(pos_is_gts_)] = pos_keep
 
             bboxes_list.append(bboxes[keep_inds.type(torch.bool)])
@@ -510,13 +511,14 @@ class BBoxHead(BaseModule):
         """
         assert rois.size(1) == 4 or rois.size(1) == 5, repr(rois.shape)
 
-        if not self.reg_class_agnostic:
+        if not self.reg_class_agnostic:  # 默认执行这部分
             label = label * 4
-            inds = torch.stack((label, label + 1, label + 2, label + 3), 1)
-            bbox_pred = torch.gather(bbox_pred, 1, inds)
+            # TODO 需要打印看看
+            inds = torch.stack((label, label + 1, label + 2, label + 3), 1)  # (n, 5)
+            bbox_pred = torch.gather(bbox_pred, 1, inds)  # (n, 5)
         assert bbox_pred.size(1) == 4
 
-        if rois.size(1) == 4:
+        if rois.size(1) == 4:  # 执行
             new_rois = self.bbox_coder.decode(
                 rois, bbox_pred, max_shape=img_meta['img_shape'])
         else:

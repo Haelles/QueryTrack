@@ -49,10 +49,16 @@ class QueryInst(TwoStageDetector):
                                   ' external proposals'
         assert gt_masks is not None, 'QueryInst needs mask groundtruth annotations' \
                                   ' for instance segmentation'
-
+        # x: list 每个元素为(batch, , , )
+        # csdn: ResNet50+FPN输出C2, C3, C4, C5四个分辨率的特征
+        # 比如[(B, 256, 200, 200), (B, 256, 100, 100), (B, 256, 50, 50), (B, 256, 25, 25)]。
         x = self.extract_feat(img)
+        # proposal_boxes为(batch_size ,num_proposals, 4)
+        # proposal_features (batch, num_proposals, proposal_feature_channel)
+        # imgs_whwh (batch_size ,num_proposals, 4)
         proposal_boxes, proposal_features, imgs_whwh = \
             self.rpn_head.forward_train(x, img_metas)
+        #
         roi_losses = self.roi_head.forward_train(
             x,
             proposal_boxes,

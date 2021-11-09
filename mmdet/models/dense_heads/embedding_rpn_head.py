@@ -73,7 +73,10 @@ class EmbeddingRPNHead(BaseModule):
         """
         proposals = self.init_proposal_bboxes.weight.clone()
         proposals = bbox_cxcywh_to_xyxy(proposals)
-        num_imgs = len(imgs[0])
+        # TODO 需要打印查看一下到底是多少
+        # img可追溯到ResNet不同层的特征，数值为用到的层数（应该是为5）
+        # 注意这里是img[0] img是一个list，list每个元素是ResNet某层提取的特征，如(batch, 256, 200, 200)
+        num_imgs = len(imgs[0])  # 因而得到的num_img == batch_size !!!
         imgs_whwh = []
         for meta in img_metas:
             h, w, _ = meta['img_shape']
@@ -86,7 +89,9 @@ class EmbeddingRPNHead(BaseModule):
         # to (batch_size ,num_proposals, 4)
         proposals = proposals * imgs_whwh
 
-        init_proposal_features = self.init_proposal_features.weight.clone()
+        init_proposal_features = self.init_proposal_features.weight.clone()  # 得到tensor
+        # init_proposal_features[None]起到增加一维的作用，变成(1, num_proposals, proposal_feature_channel)
+        # expand之后(batch, num_proposals, proposal_feature_channel)
         init_proposal_features = init_proposal_features[None].expand(
             num_imgs, *init_proposal_features.size())
         return proposals, init_proposal_features, imgs_whwh

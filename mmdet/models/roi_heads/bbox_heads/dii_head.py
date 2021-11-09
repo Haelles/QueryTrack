@@ -162,23 +162,32 @@ class DIIHead(BBoxHead):
                       and regression subnet, has shape
                       (batch_size, num_proposal, feature_dimensions).
         """
+        # proposal_feat对应上一阶段的object query，也即q_{t-1}
         N, num_proposals = proposal_feat.shape[:2]
 
         # Self attention
         proposal_feat = proposal_feat.permute(1, 0, 2)
         proposal_feat = self.attention_norm(self.attention(proposal_feat))
+        # TODO 需要打印看看
         attn_feats = proposal_feat.permute(1, 0, 2)
 
         # instance interactive
+        # 下面这行相当于对attn_feats进行reshape --> ( ,256)
         proposal_feat = proposal_feat.permute(1, 0,
                                               2).reshape(-1, self.in_channels)
+        # TODO proposal_feat_iic需要打印看看
+        # 由上一行代码构造出q_{t-1}^{*} == proposal_feat (num_all_proposals, in_channels)
+        # roi_feat == x_{t}^{box}  (batch_size*num_proposals, in_channels, H, W) 从FPN中提取出的bbox特征，尺寸已经对齐了
         proposal_feat_iic = self.instance_interactive_conv(
             proposal_feat, roi_feat)
+        # 残差连接
         proposal_feat = proposal_feat + self.instance_interactive_conv_dropout(
             proposal_feat_iic)
         obj_feat = self.instance_interactive_conv_norm(proposal_feat)
 
         # FFN
+        # 如同csdn所说，实际代码中只有一个输出object query(B,N,256)，bbox预测和cls预测都是在此基础上进行的
+        #  (batch_size*num_proposals, out_channels)
         obj_feat = self.ffn_norm(self.ffn(obj_feat))
 
         cls_feat = obj_feat
@@ -191,7 +200,7 @@ class DIIHead(BBoxHead):
 
         cls_score = self.fc_cls(cls_feat).view(N, num_proposals, -1)
         bbox_delta = self.fc_reg(reg_feat).view(N, num_proposals, -1)
-
+        # cls_score, bbox_delta 对应beta_{t} obj_feat.view对应q_{t}^{*} attn_feats对应q_{t-1}^{*}
         return cls_score, bbox_delta, obj_feat.view(N, num_proposals, -1), attn_feats
 
     @force_fp32(apply_to=('cls_score', 'bbox_pred'))
