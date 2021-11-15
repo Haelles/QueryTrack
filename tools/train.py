@@ -155,6 +155,8 @@ def main():
     meta['seed'] = args.seed
     meta['exp_name'] = osp.basename(args.config)
 
+    # print(cfg)
+
     model = build_detector(
         cfg.model,
         train_cfg=cfg.get('train_cfg'),

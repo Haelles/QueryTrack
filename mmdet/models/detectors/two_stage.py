@@ -126,6 +126,7 @@ class TwoStageDetector(BaseDetector):
         if self.with_rpn:
             proposal_cfg = self.train_cfg.get('rpn_proposal',
                                               self.test_cfg.rpn)
+            # 实际上只用了x的尺寸
             rpn_losses, proposal_list = self.rpn_head.forward_train(
                 x,
                 img_metas,

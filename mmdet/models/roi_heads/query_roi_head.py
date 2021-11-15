@@ -161,6 +161,7 @@ class QueryRoIHead(CascadeRoIHead):
         bbox_feats = bbox_roi_extractor(x[:bbox_roi_extractor.num_inputs],
                                         rois)  # 前者为x^{FPN}，后者为b_{t-1}
 
+        # bbox_feats: x_{t}^{box}
         # 原来的object_feats: (batch_size, num_proposals, proposal_feature_channel)
         # 对应上一阶段的object query，也即q_{t-1}
         # 返回的object_feats: (batch_size, num_proposal, feature_dimensions)
@@ -282,7 +283,7 @@ class QueryRoIHead(CascadeRoIHead):
                 assign_result = self.bbox_assigner[stage].assign(
                     normolize_bbox_ccwh, cls_pred_list[i], gt_bboxes[i],
                     gt_labels[i], img_metas[i])
-                sampling_result = self.bbox_Crossover Learning sampler[stage].sample(
+                sampling_result = self.bbox_sampler[stage].sample(
                     assign_result, proposal_list[i], gt_bboxes[i])
                 sampling_results.append(sampling_result)
             bbox_targets = self.bbox_head[stage].get_targets(
@@ -302,6 +303,8 @@ class QueryRoIHead(CascadeRoIHead):
                 mask_results = self._mask_forward_train(stage, x, bbox_results['attn_feats'], 
                                             sampling_results, gt_masks, self.train_cfg[stage])
                 single_stage_loss['loss_mask'] = mask_results['loss_mask']
+
+            # TODO self.with_track:
 
             for key, value in single_stage_loss.items():
                 all_stage_loss[f'stage{stage}_{key}'] = value * \
@@ -343,6 +346,13 @@ class QueryRoIHead(CascadeRoIHead):
         assert self.with_bbox, 'Bbox head must be implemented.'
         # Decode initial proposals
         num_imgs = len(img_metas)
+        # print(img_metas, flush=True)
+        # [{'filename': 'data/coco/val2017/000000397133.jpg', 'ori_filename': '000000397133.jpg',
+        #   'ori_shape': (427, 640, 3), 'img_shape': (800, 1199, 3), 'pad_shape': (800, 1216, 3),
+        #   'scale_factor': array([1.8734375, 1.8735363, 1.8734375, 1.8735363], dtype=float32), 'flip': False,
+        #   'flip_direction': None, 'img_norm_cfg': {'mean': array([123.675, 116.28, 103.53], dtype=float32),
+        #                                            'std': array([58.395, 57.12, 57.375], dtype=float32),
+        #                                            'to_rgb': True}, 'batch_input_shape': (800, 1216)}]
         proposal_list = [proposal_boxes[i] for i in range(num_imgs)]
         ori_shapes = tuple(meta['ori_shape'] for meta in img_metas)
         scale_factors = tuple(meta['scale_factor'] for meta in img_metas)

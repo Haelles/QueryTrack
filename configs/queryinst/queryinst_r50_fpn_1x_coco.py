@@ -100,6 +100,7 @@ model = dict(
                 norm_cfg=dict(type='BN'),
                 upsample_cfg=dict(type='deconv', scale_factor=2),
                 loss_dice=dict(type='DiceLoss', loss_weight=8.0)) for _ in range(num_stages)]),
+    # TODO add track_head in roi_head
     # training and testing settings
     train_cfg=dict(
         rpn=None,

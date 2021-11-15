@@ -31,6 +31,10 @@ class BaseRoIHead(BaseModule, metaclass=ABCMeta):
         if mask_head is not None:
             self.init_mask_head(mask_roi_extractor, mask_head)
 
+        # TODO track_head
+        # if track_head is not None:
+        #   self.init_track_head(track_roi_extractor, track_head)
+
         self.init_assigner_sampler()
 
     @property

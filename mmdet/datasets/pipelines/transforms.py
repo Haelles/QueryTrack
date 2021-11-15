@@ -451,6 +451,7 @@ class RandomFlip(object):
         if results['flip']:
             # flip image
             for key in results.get('img_fields', ['img']):
+                # TODO 打印key类型
                 results[key] = mmcv.imflip(
                     results[key], direction=results['flip_direction'])
             # flip bboxes
