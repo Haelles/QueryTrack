@@ -58,10 +58,10 @@ class SingleRoIExtractor(BaseRoIExtractor):
     def forward(self, feats, rois, roi_scale_factor=None):
         """Forward function."""
         # feats: list 比如[(B, 256, 200, 200), (B, 256, 100, 100), (B, 256, 50, 50), (B, 256, 25, 25)]
-        # rois: (batch * num_proposals, 5)
-        out_size = self.roi_layers[0].output_size
+        # rois: (batch * num_proposals, 5) 实际:确实是torch.Size([200, 5])
+        out_size = self.roi_layers[0].output_size  # bbox部分对应固定的(7, 7) mask_head对应(14, 14) MaskTrack也是这样
         num_levels = len(feats)  # == 4
-        expand_dims = (-1, self.out_channels * out_size[0] * out_size[1])
+        expand_dims = (-1, self.out_channels * out_size[0] * out_size[1])  # (-1, 256*7*7==12544)
         if torch.onnx.is_in_onnx_export():
             # Work around to export mask-rcnn to onnx
             roi_feats = rois[:, :1].clone().detach()
@@ -81,14 +81,13 @@ class SingleRoIExtractor(BaseRoIExtractor):
             return self.roi_layers[0](feats[0], rois)
         # rois: (batch * num_proposals, 5)
         # target_lvls (batch * num_proposals, ) 看起来是一个0-3的index 一维张量序列
-        # TODO 需要打印看看
+        # 实际确实是torch.Size([200]) 根据scale映射到4个不同层
         target_lvls = self.map_roi_levels(rois, num_levels)
 
         if roi_scale_factor is not None:  # default is None 不执行
             rois = self.roi_rescale(rois, roi_scale_factor)
 
         for i in range(num_levels):  # 4
-            # TODO 需要打印看看
             # mask:
             mask = target_lvls == i  # 获得当前level需要用到的region proposal坐标
             if torch.onnx.is_in_onnx_export():
@@ -104,9 +103,10 @@ class SingleRoIExtractor(BaseRoIExtractor):
             if inds.numel() > 0:  # 返回数组中元素的个数
                 rois_ = rois[inds]
                 # rois_ (n, 5) n为这个level要用到的region proposal坐标数
-                # feats[i] e.g. (B, 256, 200, 200) 这个level的特征
+                # feats[i] e.g. (B, 256, 200, 200) 这个level的特征（之前从FPN中提取到的）
                 roi_feats_t = self.roi_layers[i](feats[i], rois_)
-                roi_feats[inds] = roi_feats_t
+                # roi_feats_t (n, default_num_proposals==256, 7, 7) 或是mask的(n, 256, 14, 14)
+                roi_feats[inds] = roi_feats_t  # 通过布尔数组赋值过去
             else:
                 # Sometimes some pyramid levels will not be used for RoI
                 # feature extraction and this will cause an incomplete
@@ -117,5 +117,6 @@ class SingleRoIExtractor(BaseRoIExtractor):
                 roi_feats += sum(
                     x.view(-1)[0]
                     for x in self.parameters()) * 0. + feats[i].sum() * 0.
-        # TODO 需要打印看看，应该是(batch * num_proposals, 256, 7, 7) ; dict: output_size=7
+        # 应该是(batch * num_proposals, 256, 7, 7) ; dict: output_size=7
+        # 打印确实是torch.Size([200, 256, 7, 7])，各个roi_feats_t赋值回去
         return roi_feats

@@ -67,7 +67,7 @@ def build_dataset(cfg, default_args=None):
             build_dataset(cfg['dataset'], default_args), cfg['oversample_thr'])
     elif isinstance(cfg.get('ann_file'), (list, tuple)):
         dataset = _concat_dataset(cfg, default_args)
-    else:
+    else:  # train()执行这个，传入的default_args=None
         dataset = build_from_cfg(cfg, DATASETS, default_args)
 
     return dataset

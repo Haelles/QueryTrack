@@ -163,6 +163,8 @@ class BaseDetector(BaseModule, metaclass=ABCMeta):
         should be double nested (i.e.  List[Tensor], List[List[dict]]), with
         the outer list indicating test time augmentations.
         """
+        # 确实调用了这个
+
         if return_loss:
             return self.forward_train(img, img_metas, **kwargs)
         else:
@@ -230,6 +232,7 @@ class BaseDetector(BaseModule, metaclass=ABCMeta):
                 DDP, it means the batch size on each GPU), which is used for \
                 averaging the logs.
         """
+        # 从epoch_base_runner.py: self.model.train_step 跳转进入这里
         losses = self(**data)
         loss, log_vars = self._parse_losses(losses)
 

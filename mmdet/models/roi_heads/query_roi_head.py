@@ -230,8 +230,8 @@ class QueryRoIHead(CascadeRoIHead):
         """Forward function in training stage.
 
         Args:
-            x (list[Tensor]): list of multi-level img features.
-            proposals (Tensor): Decoded proposal bboxes, has shape
+            x (list[Tensor]): list of multi-level img features. 是FPN的输出，实际上type是tuple 元素尺寸==(batch,channel,h,w)
+            proposal_boxes (Tensor): Decoded proposal bboxes, has shape
                 (batch_size, num_proposals, 4)
             proposal_features (Tensor): Expanded proposal
                 features, has shape

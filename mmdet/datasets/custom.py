@@ -96,7 +96,8 @@ class CustomDataset(Dataset):
         if not test_mode:
             valid_inds = self._filter_imgs()
             # TODO 打印查看一下type
-            
+            # type == list
+            # 值为0-11xxxx
             self.data_infos = [self.data_infos[i] for i in valid_inds]
             if self.proposals is not None:
                 self.proposals = [self.proposals[i] for i in valid_inds]
