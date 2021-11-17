@@ -1,7 +1,4 @@
-import itertools
-import logging
 import os.path as osp
-import tempfile
 import warnings
 from collections import OrderedDict
 
@@ -9,11 +6,16 @@ import mmcv
 import numpy as np
 from mmcv.utils import print_log
 from terminaltables import AsciiTable
+from torch.utils.data import Dataset
 
-from mmdet.core import eval_recalls
-from .api_wrappers import COCO, COCOeval
+from mmdet.core import eval_map, eval_recalls
 from .builder import DATASETS
-from .custom import CustomDataset
+from .pipelines import Compose
+
+import mmcv
+import numpy as np
+from mmcv.utils import print_log
+from terminaltables import AsciiTable
 
 
 import os.path as osp
@@ -21,8 +23,6 @@ import random
 
 from .custom import CustomDataset
 from .extra_aug import ExtraAugmentation
-from .transforms import (ImageTransform, BboxTransform, MaskTransform,
-                         Numpy2Tensor)
 from pycocotools.ytvos import YTVOS
 from mmcv.parallel import DataContainer as DC
 from .utils import to_tensor, random_scale
@@ -30,6 +30,7 @@ from .utils import to_tensor, random_scale
 
 @DATASETS.register_module()
 class YTVISDataset(CustomDataset):
+    # TODO 后续调整这些类的名字
     CLASSES = ('person', 'giant_panda', 'lizard', 'parrot', 'skateboard', 'sedan',
                'ape', 'dog', 'snake', 'monkey', 'hand', 'rabbit', 'duck', 'cat', 'cow', 'fish',
                'train', 'horse', 'turtle', 'bear', 'motorbike', 'giraffe', 'leopard',
@@ -40,8 +41,9 @@ class YTVISDataset(CustomDataset):
     def __init__(self,
                  ann_file,
                  img_prefix,
-                 img_scale,
-                 img_norm_cfg,
+                 pipeline,
+                 img_scale=None,
+                 img_norm_cfg=None,
                  size_divisor=None,
                  proposal_file=None,
                  num_max_proposals=1000,
@@ -58,12 +60,12 @@ class YTVISDataset(CustomDataset):
         self.img_prefix = img_prefix
 
         # load annotations (and proposals)
-        self.vid_infos = self.load_annotations(ann_file)
+        self.vid_infos = self.load_annotations(ann_file)  # "videos"
         img_ids = []
         for idx, vid_info in enumerate(self.vid_infos):
             for frame_id in range(len(vid_info['filenames'])):
                 img_ids.append((idx, frame_id))  # type == tuple
-        self.img_ids = img_ids
+        self.img_ids = img_ids  # 一系列元组，由在视频的编号idx和在视频内部唯一的编号frame_id组成
         # TODO 打印看看
         if proposal_file is not None:
             self.proposals = self.load_proposals(proposal_file)
@@ -77,12 +79,13 @@ class YTVISDataset(CustomDataset):
 
         # (long_edge, short_edge) or [(long1, short1), (long2, short2), ...]
         # cfg: img_scale=(640, 360) 转变成list
-        self.img_scales = img_scale if isinstance(img_scale,
-                                                  list) else [img_scale]
-        assert mmcv.is_list_of(self.img_scales, tuple)
+        # self.img_scales = img_scale if isinstance(img_scale,
+        #                                           list) else [img_scale]
+        # assert mmcv.is_list_of(self.img_scales, tuple)
+
         # normalization configs
         # img_norm_cfg = dict(mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
-        self.img_norm_cfg = img_norm_cfg
+        # self.img_norm_cfg = img_norm_cfg
 
         # max proposals per image
         self.num_max_proposals = num_max_proposals
@@ -110,11 +113,7 @@ class YTVISDataset(CustomDataset):
         if not self.test_mode:
             self._set_group_flag()  # Set flag according to image aspect ratio 设置横纵比
         # transforms
-        self.img_transform = ImageTransform(
-            size_divisor=self.size_divisor, **self.img_norm_cfg)
-        self.bbox_transform = BboxTransform()
-        self.mask_transform = MaskTransform()
-        self.numpy2tensor = Numpy2Tensor()
+        self.pipeline = Compose(pipeline)
 
         # if use extra augmentation
         if extra_aug is not None:
@@ -145,7 +144,7 @@ class YTVISDataset(CustomDataset):
         self.vid_ids = self.ytvos.getVidIds()
         vid_infos = []
         for i in self.vid_ids:
-            info = self.ytvos.loadVids([i])[0]  # 得到json中video字段中的一个元素，包括id weight等
+            info = self.ytvos.loadVids([i])[0]  # 得到json中videos字段中的一个元素，包括id weight等
             info['filenames'] = info['file_names']
             vid_infos.append(info)
         return vid_infos

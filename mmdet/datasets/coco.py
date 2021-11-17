@@ -54,6 +54,12 @@ class CocoDataset(CustomDataset):
             info = self.coco.load_imgs([i])[0]
             info['filename'] = info['file_name']
             data_infos.append(info)
+            # data_infos[0]
+            # {'license': 3, 'file_name': '000000391895.jpg',
+            #  'coco_url': 'http://images.cocodataset.org/train2017/000000391895.jpg', 'height': 360, 'width': 640,
+            #  'date_captured': '2013-11-14 11:18:45',
+            #  'flickr_url': 'http://farm9.staticflickr.com/8186/8119368305_4e622c8349_z.jpg', 'id': 391895,
+            #  'filename': '000000391895.jpg'}
             ann_ids = self.coco.get_ann_ids(img_ids=[i])
             total_ann_ids.extend(ann_ids)
         assert len(set(total_ann_ids)) == len(
