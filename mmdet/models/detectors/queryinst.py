@@ -20,6 +20,7 @@ class QueryInst(TwoStageDetector):
                       gt_bboxes_ignore=None,
                       gt_masks=None,
                       proposals=None,
+                      ref_data=None,
                       **kwargs):
         """
 
@@ -40,6 +41,7 @@ class QueryInst(TwoStageDetector):
                 each box. But we don't support it in this architecture.
             proposals (List[Tensor], optional): override rpn proposals with
                 custom proposals. Use when `with_rpn` is False.
+            ref_data (None | dict) : reference data.
 
         Returns:
             dict[str, Tensor]: a dictionary of loss components
@@ -53,6 +55,7 @@ class QueryInst(TwoStageDetector):
         # csdn: ResNet50+FPN输出C2, C3, C4, C5四个分辨率的特征
         # 比如[(B, 256, 200, 200), (B, 256, 100, 100), (B, 256, 50, 50), (B, 256, 25, 25)]。
         x = self.extract_feat(img)
+        ref_x = self.extract_feat(ref_data['img'])
         # proposal_boxes为(batch_size ,num_proposals, 4)
         # proposal_features (batch, num_proposals, proposal_feature_channel)
         # imgs_whwh (batch_size ,num_proposals, 4)
@@ -68,7 +71,9 @@ class QueryInst(TwoStageDetector):
             gt_labels,
             gt_bboxes_ignore=gt_bboxes_ignore,
             gt_masks=gt_masks,
-            imgs_whwh=imgs_whwh)
+            imgs_whwh=imgs_whwh,
+            ref_data=ref_data,
+            ref_x=ref_x)
         return roi_losses
 
     def simple_test(self, img, img_metas, rescale=False):

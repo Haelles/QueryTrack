@@ -8,11 +8,13 @@ from .cascade_roi_head import CascadeRoIHead
 
 from mmcv.ops.nms import batched_nms
 
+
 def mask2results(mask_preds, det_labels, num_classes):
     cls_segms = [[] for _ in range(num_classes)]
     for i in range(mask_preds.shape[0]):
         cls_segms[det_labels[i]].append(mask_preds[i])
     return cls_segms
+
 
 @HEADS.register_module()
 class QueryRoIHead(CascadeRoIHead):
@@ -169,7 +171,7 @@ class QueryRoIHead(CascadeRoIHead):
         # 对应上一阶段的object query，也即q_{t-1}
         # 返回的object_feats: (batch_size, num_proposal, feature_dimensions)
         cls_score, bbox_pred, object_feats, attn_feats = bbox_head(bbox_feats,
-                                                       object_feats)
+                                                                   object_feats)
         proposal_list = self.bbox_head[stage].refine_bboxes(
             rois,
             rois.new_zeros(len(rois)),  # dummy arg 意思是"虚拟/伪参数"
@@ -192,9 +194,12 @@ class QueryRoIHead(CascadeRoIHead):
     def _mask_forward(self, stage, x, rois, attn_feats):
         mask_roi_extractor = self.mask_roi_extractor[stage]
         mask_head = self.mask_head[stage]
+        # mask_feats == x_{t}^{mask} torch.Size([34, 256, 14, 14]) torch.Size([8, 256, 14, 14])
         mask_feats = mask_roi_extractor(x[:mask_roi_extractor.num_inputs],
-                                        rois)
-        # do not support caffe_c4 model anymore
+                                        rois)  # x^{FPN}  b_{t}  设置了out_channel=256，因此dim1为256
+        # mask_pred torch.Size([34, 80, 28, 28]) torch.Size([8, 80, 28, 28])
+        # mask_roi_extractor内部进行了RoIAlign，所以mask_feats计作roi_feat
+        # attn_feats是基于queries注意力计算得到的 --> proposal_feat
         mask_pred = mask_head(mask_feats, attn_feats)
 
         mask_results = dict(mask_pred=mask_pred)
@@ -202,14 +207,15 @@ class QueryRoIHead(CascadeRoIHead):
 
     def _mask_forward_train(self, stage, x, attn_feats, sampling_results, gt_masks, rcnn_train_cfg):
 
-        if sum([len(gt_mask) for gt_mask in gt_masks])==0:
+        if sum([len(gt_mask) for gt_mask in gt_masks]) == 0:
             print('Ground Truth Not Found!')
             loss_mask = sum([_.sum() for _ in self.mask_head[stage].parameters()]) * 0.
             return dict(loss_mask=loss_mask)
         pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
         attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, sampling_results)])
+        # mask_results['mask_pred'] == m_{t} torch.Size([34, 80, 28, 28]) torch.Size([8, 80, 28, 28])
         mask_results = self._mask_forward(stage, x, pos_rois, attn_feats)
-
+        # 从gt的bitmap mask中截取
         mask_targets = self.mask_head[stage].get_targets(
             sampling_results, gt_masks, rcnn_train_cfg)
 
@@ -220,6 +226,30 @@ class QueryRoIHead(CascadeRoIHead):
         mask_results.update(loss_mask)
         return mask_results
 
+    def _track_forward(self, stage, x, rois, attn_feats, ref_x, ref_pos_rois):
+        track_roi_extractor = self.track_roi_extractor[stage]
+        track_head = self.track_head[stage]
+        # track_feats == x_{t}^{track}
+        track_feats = track_roi_extractor(x[:track_roi_extractor.num_inputs],
+                                          rois)  # x^{FPN}  b_{t}
+        ref_track_feats = track_roi_extractor(ref_x[:track_roi_extractor.num_inputs],
+                                              ref_pos_rois)
+        track_pred = track_head(track_feats, ref_track_feats, attn_feats)
+
+        track_results = dict(track_pred=track_pred)
+        return track_results
+
+    def _track_forward_train(self, stage, x, attn_feats, sampling_results, ref_x, ref_rois):
+
+        pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
+        attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, sampling_results)])
+        track_results = self._track_forward(stage, x, pos_rois, attn_feats, ref_x, ref_rois)
+
+        loss_track = self.track_head[stage].loss(track_results['mask_pred'],
+                                                 track_targets, pos_labels)
+        track_results.update(loss_track)
+        return track_results
+
     def forward_train(self,
                       x,
                       proposal_boxes,
@@ -229,7 +259,9 @@ class QueryRoIHead(CascadeRoIHead):
                       gt_labels,
                       gt_bboxes_ignore=None,
                       imgs_whwh=None,
-                      gt_masks=None):
+                      gt_masks=None,
+                      ref_data=None,
+                      ref_x=None):
         """Forward function in training stage.
 
         Args:
@@ -255,6 +287,8 @@ class QueryRoIHead(CascadeRoIHead):
                     [img_width,img_height, img_width, img_height].
             gt_masks (None | Tensor) : true segmentation masks for each box
                 used if the architecture supports a segmentation task.
+            ref_data (None | dict) : reference data.
+            ref_x (list[Tensor]): list of multi-level ref_img features
 
         Returns:
             dict[str, Tensor]: a dictionary of loss components of all stage.
@@ -269,6 +303,7 @@ class QueryRoIHead(CascadeRoIHead):
         proposal_list = [proposal_boxes[i] for i in range(len(proposal_boxes))]  # len: batch_size
         object_feats = proposal_features  # (batch_size, num_proposals, proposal_feature_channel)
         all_stage_loss = {}
+        ref_rois = bbox2roi(ref_data['ref_bboxes'])
         for stage in range(self.num_stages):
             rois = bbox2roi(proposal_list)  # (batch * num_proposals, 5) 5: img_index, x1, y1, x2, y2
             bbox_results = self._bbox_forward(stage, x, rois, object_feats,
@@ -283,9 +318,25 @@ class QueryRoIHead(CascadeRoIHead):
             for i in range(num_imgs):
                 normolize_bbox_ccwh = bbox_xyxy_to_cxcywh(proposal_list[i] /
                                                           imgs_whwh[i])
+                # < AssignResult(num_gts=10, gt_inds.shape = (100,), max_overlaps = None, labels.shape = (100,)) >
                 assign_result = self.bbox_assigner[stage].assign(
                     normolize_bbox_ccwh, cls_pred_list[i], gt_bboxes[i],
                     gt_labels[i], img_metas[i])
+
+                # < SamplingResult({
+                #     'neg_bboxes': torch.Size([90, 4]),
+                #     'neg_inds': tensor([0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                #                         20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37,
+                #                         38, 39, 40, 41, 42, 43, 45, 47, 48, 49, 50, 51, 52, 54, 55, 56, 57, 58,
+                #                         59, 60, 61, 62, 63, 64, 66, 67, 68, 70, 71, 72, 73, 74, 75, 76, 77, 78,
+                #                         79, 80, 81, 82, 83, 84, 85, 86, 87, 89, 90, 92, 93, 94, 96, 97, 98, 99],
+                #                        device='cuda:0'),
+                #     'num_gts': 10,
+                #     'pos_assigned_gt_inds': tensor([3, 4, 5, 7, 9, 1, 6, 0, 2, 8], device='cuda:0'),
+                #     'pos_bboxes': torch.Size([10, 4]),
+                #     'pos_inds': tensor([4, 8, 44, 46, 53, 65, 69, 88, 91, 95], device='cuda:0'),
+                #     'pos_is_gt': tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0], device='cuda:0', dtype=torch.uint8)
+                # }) >
                 sampling_result = self.bbox_sampler[stage].sample(
                     assign_result, proposal_list[i], gt_bboxes[i])
                 sampling_results.append(sampling_result)
@@ -303,15 +354,21 @@ class QueryRoIHead(CascadeRoIHead):
                 imgs_whwh=imgs_whwh)
 
             if self.with_mask:
-                mask_results = self._mask_forward_train(stage, x, bbox_results['attn_feats'], 
-                                            sampling_results, gt_masks, self.train_cfg[stage])
+                # x: FPN
+                # bbox_results['attn_feats']: q_{t-1}^{*}
+                mask_results = self._mask_forward_train(stage, x, bbox_results['attn_feats'],
+                                                        sampling_results, gt_masks, self.train_cfg[stage])
                 single_stage_loss['loss_mask'] = mask_results['loss_mask']
 
             # TODO self.with_track:
+            if self.with_track:
+                track_results = self._track_forward_train(stage, x, bbox_results['attn_feats'], sampling_results,
+                                                          ref_x, ref_rois)
+                single_stage_loss['loss_track'] = track_results['loss_track']
 
             for key, value in single_stage_loss.items():
                 all_stage_loss[f'stage{stage}_{key}'] = value * \
-                                    self.stage_loss_weights[stage]
+                                                        self.stage_loss_weights[stage]
 
         return all_stage_loss
 
@@ -392,7 +449,7 @@ class QueryRoIHead(CascadeRoIHead):
             cls_score_per_img = cls_score[img_id]
             scores_per_img, topk_indices = cls_score_per_img.flatten(
                 0, 1).topk(
-                    self.test_cfg.max_per_img, sorted=False)
+                self.test_cfg.max_per_img, sorted=False)
             labels_per_img = topk_indices % num_classes
             bbox_pred_per_img = proposal_list[img_id][topk_indices //
                                                       num_classes]
@@ -411,15 +468,15 @@ class QueryRoIHead(CascadeRoIHead):
 
         if self.with_mask:
             if rescale and not isinstance(scale_factors[0], float):
-                    scale_factors = [
-                        torch.from_numpy(scale_factor).to(det_bboxes[0].device)
-                        for scale_factor in scale_factors
-                    ]
-            _bboxes = [
-                    det_bboxes[i][:, :4] *
-                    scale_factors[i] if rescale else det_bboxes[i][:, :4]
-                    for i in range(len(det_bboxes))
+                scale_factors = [
+                    torch.from_numpy(scale_factor).to(det_bboxes[0].device)
+                    for scale_factor in scale_factors
                 ]
+            _bboxes = [
+                det_bboxes[i][:, :4] *
+                scale_factors[i] if rescale else det_bboxes[i][:, :4]
+                for i in range(len(det_bboxes))
+            ]
             segm_results = []
             mask_pred = mask_results['mask_pred']
             for img_id in range(num_imgs):
@@ -432,7 +489,7 @@ class QueryRoIHead(CascadeRoIHead):
                 segm_results.append(segm_result)
 
             ms_segm_result['ensemble'] = segm_results
-        
+
         if self.with_mask:
             results = list(
                 zip(ms_bbox_result['ensemble'], ms_segm_result['ensemble']))
@@ -448,14 +505,13 @@ class QueryRoIHead(CascadeRoIHead):
                  aug_img_metas,
                  aug_imgs_whwh,
                  rescale=False):
-        
+
         samples_per_gpu = len(aug_img_metas[0])
         aug_det_bboxes = [[] for _ in range(samples_per_gpu)]
         aug_det_labels = [[] for _ in range(samples_per_gpu)]
         aug_mask_preds = [[] for _ in range(samples_per_gpu)]
         for x, proposal_boxes, proposal_features, img_metas, imgs_whwh in \
-            zip(aug_x, aug_proposal_boxes, aug_proposal_features, aug_img_metas, aug_imgs_whwh):
-            
+                zip(aug_x, aug_proposal_boxes, aug_proposal_features, aug_img_metas, aug_imgs_whwh):
 
             num_imgs = len(img_metas)
             proposal_list = [proposal_boxes[i] for i in range(num_imgs)]
@@ -466,18 +522,18 @@ class QueryRoIHead(CascadeRoIHead):
             for stage in range(self.num_stages):
                 rois = bbox2roi(proposal_list)
                 bbox_results = self._bbox_forward(stage, x, rois, object_feats,
-                                                img_metas)
+                                                  img_metas)
                 object_feats = bbox_results['object_feats']
                 cls_score = bbox_results['cls_score']
                 proposal_list = bbox_results['detach_proposal_list']
-            
+
             if self.with_mask:
                 rois = bbox2roi(proposal_list)
                 mask_results = self._mask_forward(stage, x, rois, bbox_results['attn_feats'])
                 mask_results['mask_pred'] = mask_results['mask_pred'].reshape(
                     num_imgs, -1, *mask_results['mask_pred'].size()[1:]
                 )
-            
+
             num_classes = self.bbox_head[-1].num_classes
             det_bboxes = []
             det_labels = []
@@ -491,10 +547,10 @@ class QueryRoIHead(CascadeRoIHead):
                 cls_score_per_img = cls_score[img_id]
                 scores_per_img, topk_indices = cls_score_per_img.flatten(
                     0, 1).topk(
-                        self.test_cfg.max_per_img, sorted=False)
+                    self.test_cfg.max_per_img, sorted=False)
                 labels_per_img = topk_indices % num_classes
                 bbox_pred_per_img = proposal_list[img_id][topk_indices //
-                                                        num_classes]
+                                                          num_classes]
                 if rescale:
                     scale_factor = img_metas[img_id]['scale_factor']
                     bbox_pred_per_img /= bbox_pred_per_img.new_tensor(scale_factor)
@@ -504,18 +560,18 @@ class QueryRoIHead(CascadeRoIHead):
                     torch.cat([bbox_pred_per_img, scores_per_img[:, None]], dim=1))
                 aug_det_labels[img_id].append(labels_per_img)
                 det_labels.append(labels_per_img)
-            
+
             if self.with_mask:
                 if rescale and not isinstance(scale_factors[0], float):
-                        scale_factors = [
-                            torch.from_numpy(scale_factor).to(det_bboxes[0].device)
-                            for scale_factor in scale_factors
-                        ]
-                _bboxes = [
-                        det_bboxes[i][:, :4] *
-                        scale_factors[i] if rescale else det_bboxes[i][:, :4]
-                        for i in range(len(det_bboxes))
+                    scale_factors = [
+                        torch.from_numpy(scale_factor).to(det_bboxes[0].device)
+                        for scale_factor in scale_factors
                     ]
+                _bboxes = [
+                    det_bboxes[i][:, :4] *
+                    scale_factors[i] if rescale else det_bboxes[i][:, :4]
+                    for i in range(len(det_bboxes))
+                ]
                 mask_pred = mask_results['mask_pred']
                 for img_id in range(num_imgs):
                     mask_pred_per_img = mask_pred[img_id].flatten(0, 1)[topk_indices]
@@ -535,7 +591,8 @@ class QueryRoIHead(CascadeRoIHead):
                 flip = img_meta['flip']
                 flip_direction = img_meta['flip_direction']
                 aug_det_bboxes[img_id][aug_id][:, :-1] = bbox_flip(aug_det_bboxes[img_id][aug_id][:, :-1],
-                                                    img_shape, flip_direction) if flip else aug_det_bboxes[img_id][aug_id][:, :-1]
+                                                                   img_shape, flip_direction) if flip else \
+                    aug_det_bboxes[img_id][aug_id][:, :-1]
                 if flip:
                     if flip_direction == 'horizontal':
                         aug_mask_preds[img_id][aug_id] = aug_mask_preds[img_id][aug_id][:, :, ::-1]
@@ -548,14 +605,15 @@ class QueryRoIHead(CascadeRoIHead):
             mask_preds_per_im = np.concatenate(aug_mask_preds[img_id])
 
             # TODO(vealocia): implement batched_nms here.
-            det_bboxes_per_im, keep_inds = batched_nms(det_bboxes_per_im[:, :-1], det_bboxes_per_im[:, -1].contiguous(), det_labels_per_im, self.test_cfg.nms)
+            det_bboxes_per_im, keep_inds = batched_nms(det_bboxes_per_im[:, :-1], det_bboxes_per_im[:, -1].contiguous(),
+                                                       det_labels_per_im, self.test_cfg.nms)
             det_bboxes_per_im = det_bboxes_per_im[:self.test_cfg.max_per_img, ...]
             det_labels_per_im = det_labels_per_im[keep_inds][:self.test_cfg.max_per_img, ...]
             mask_preds_per_im = mask_preds_per_im[keep_inds.detach().cpu().numpy()][:self.test_cfg.max_per_img, ...]
             det_bboxes.append(det_bboxes_per_im)
             det_labels.append(det_labels_per_im)
             mask_preds.append(mask_preds_per_im)
-    
+
         ms_bbox_result = {}
         ms_segm_result = {}
         num_classes = self.bbox_head[-1].num_classes

@@ -43,6 +43,11 @@ model = dict(
             roi_layer=dict(type='RoIAlign', output_size=14, sampling_ratio=2),
             out_channels=256,
             featmap_strides=[4, 8, 16, 32]),
+        track_roi_extractor=dict(
+            type='SingleRoIExtractor',
+            roi_layer=dict(type='RoIAlign', output_size=7, sampling_ratio=2),  # TODO 结合原任务选的size=7，后续检查一下
+            out_channels=256,
+            featmap_strides=[4, 8, 16, 32]),
         bbox_head=[
             dict(
                 type='DIIHead',
@@ -104,9 +109,22 @@ model = dict(
         # TODO add track_head in roi_head
         track_head=[
             dict(
+                type='TrackHead',
+                num_fcs=2,
+                in_channels=256,
+                fc_out_channels=1024,
+                roi_feat_size=7,
+                match_coeff=[1.0, 2.0, 10],
 
-            )
-        ]
+                dynamic_conv_cfg=dict(
+                    type='DynamicConv',
+                    in_channels=256,
+                    feat_channels=64,
+                    out_channels=256,
+                    input_feat_shape=7,
+                    with_proj=True,
+                    act_cfg=dict(type='ReLU', inplace=True),
+                    norm_cfg=dict(type='LN'))) for _ in range(num_stages)]
     ),
     # training and testing settings
     train_cfg=dict(

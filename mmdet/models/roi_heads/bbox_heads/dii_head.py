@@ -168,14 +168,14 @@ class DIIHead(BBoxHead):
         # Self attention
         proposal_feat = proposal_feat.permute(1, 0, 2)
         proposal_feat = self.attention_norm(self.attention(proposal_feat))
-        # TODO 需要打印看看
+        # attn_feats: torch.Size([2, 100, 256])
         attn_feats = proposal_feat.permute(1, 0, 2)
 
         # instance interactive
         # 下面这行相当于对attn_feats进行reshape --> ( ,256)
         proposal_feat = proposal_feat.permute(1, 0,
                                               2).reshape(-1, self.in_channels)
-        # TODO proposal_feat_iic需要打印看看
+        # proposal_feat_iic: torch.Size([200, 256])
         # 由上一行代码构造出q_{t-1}^{*} == proposal_feat (num_all_proposals, in_channels)
         # roi_feat == x_{t}^{box}  (batch_size*num_proposals, in_channels, H, W) 从FPN中提取出的bbox特征，尺寸已经对齐了
         proposal_feat_iic = self.instance_interactive_conv(
