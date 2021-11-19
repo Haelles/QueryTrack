@@ -2,12 +2,6 @@ import os.path as osp
 import warnings
 from collections import OrderedDict
 
-import mmcv
-import numpy as np
-from mmcv.utils import print_log
-from terminaltables import AsciiTable
-from torch.utils.data import Dataset
-
 from mmdet.core import eval_map, eval_recalls
 from .builder import DATASETS
 from .pipelines import Compose
@@ -17,15 +11,12 @@ import numpy as np
 from mmcv.utils import print_log
 from terminaltables import AsciiTable
 
-
 import os.path as osp
 import random
 
 from .custom import CustomDataset
-from .extra_aug import ExtraAugmentation
 from pycocotools.ytvos import YTVOS
 from mmcv.parallel import DataContainer as DC
-from .utils import to_tensor, random_scale
 
 
 @DATASETS.register_module()
@@ -42,6 +33,7 @@ class YTVISDataset(CustomDataset):
                  ann_file,
                  img_prefix,
                  pipeline,
+                 seg_prefix=None,
                  img_scale=None,
                  img_norm_cfg=None,
                  size_divisor=None,
@@ -52,12 +44,13 @@ class YTVISDataset(CustomDataset):
                  with_crowd=True,
                  with_label=True,
                  with_track=False,
-                 extra_aug=None,
                  aug_ref_bbox_param=None,
                  resize_keep_ratio=True,
                  test_mode=False):
         # prefix of images path
         self.img_prefix = img_prefix
+        self.seg_prefix = seg_prefix
+        self.proposal_file = proposal_file
 
         # load annotations (and proposals)
         self.vid_infos = self.load_annotations(ann_file)  # "videos"
@@ -115,12 +108,6 @@ class YTVISDataset(CustomDataset):
         # transforms
         self.pipeline = Compose(pipeline)
 
-        # if use extra augmentation
-        if extra_aug is not None:
-            self.extra_aug = ExtraAugmentation(**extra_aug)
-        else:
-            self.extra_aug = None
-
         # image rescale if keep ratio
         self.resize_keep_ratio = resize_keep_ratio
 
@@ -130,9 +117,13 @@ class YTVISDataset(CustomDataset):
     def __getitem__(self, idx):
         if self.test_mode:
             return self.prepare_test_img(self.img_ids[idx])
-        # TODO 看看idx是什么，如果是int的话就是随机取某视频的某一帧
-        data = self.prepare_train_img(self.img_ids[idx])
-        return data
+
+        while True:
+            data = self.prepare_train_img(self.img_ids[idx])
+            if data is None:
+                idx = self._rand_another(idx)
+                continue
+            return data
 
     def load_annotations(self, ann_file):
         self.ytvos = YTVOS(ann_file)  # 在YTVOS类里进行了json.load
@@ -206,112 +197,141 @@ class YTVISDataset(CustomDataset):
         assert len(valid_samples) > 0
         return random.choice(valid_samples)
 
+    def pre_pipeline(self, results):
+        """Prepare results dict for pipeline."""
+        results['img_prefix'] = self.img_prefix
+        results['seg_prefix'] = self.seg_prefix
+        results['proposal_file'] = self.proposal_file
+        results['bbox_fields'] = []
+        results['mask_fields'] = []
+        results['seg_fields'] = []
+
     def prepare_train_img(self, idx):
         # prepare a pair of image in a sequence
         vid, frame_id = idx  # type(idx) == tuple
         vid_info = self.vid_infos[vid]
-        # load image
-        img = mmcv.imread(osp.join(self.img_prefix, vid_info['filenames'][frame_id]))  # ndarray
-        basename = osp.basename(vid_info['filenames'][frame_id])
+        # # load image
+        # img = mmcv.imread(osp.join(self.img_prefix, vid_info['filenames'][frame_id]))  # ndarray
+        # basename = osp.basename(vid_info['filenames'][frame_id])
         _, ref_frame_id = self.sample_ref(idx)
-        ref_img = mmcv.imread(osp.join(self.img_prefix, vid_info['filenames'][ref_frame_id]))
-        # load proposals if necessary
-        if self.proposals is not None:
-            proposals = self.proposals[idx][:self.num_max_proposals]
-            # TODO: Handle empty proposals properly. Currently images with
-            # no proposals are just ignored, but they can be used for
-            # training in concept.
-            if len(proposals) == 0:
-                return None
-            if not (proposals.shape[1] == 4 or proposals.shape[1] == 5):
-                raise AssertionError(
-                    'proposals should have shapes (n, 4) or (n, 5), '
-                    'but found {}'.format(proposals.shape))
-            if proposals.shape[1] == 5:
-                scores = proposals[:, 4, None]
-                proposals = proposals[:, :4]
-            else:
-                scores = None
+        # ref_img = mmcv.imread(osp.join(self.img_prefix, vid_info['filenames'][ref_frame_id]))
+        # # load proposals if necessary
+        # if self.proposals is not None:
+        #     proposals = self.proposals[idx][:self.num_max_proposals]
+        #     # TODO: Handle empty proposals properly. Currently images with
+        #     # no proposals are just ignored, but they can be used for
+        #     # training in concept.
+        #     if len(proposals) == 0:
+        #         return None
+        #     if not (proposals.shape[1] == 4 or proposals.shape[1] == 5):
+        #         raise AssertionError(
+        #             'proposals should have shapes (n, 4) or (n, 5), '
+        #             'but found {}'.format(proposals.shape))
+        #     if proposals.shape[1] == 5:
+        #         scores = proposals[:, 4, None]
+        #         proposals = proposals[:, :4]
+        #     else:
+        #         scores = None
 
-        ann = self.get_ann_info(vid, frame_id)
-        ref_ann = self.get_ann_info(vid, ref_frame_id)
-        gt_bboxes = ann['bboxes']  # 是二维数组
-        gt_labels = ann['labels']
-        ref_bboxes = ref_ann['bboxes']
-        # obj ids attribute does not exist in current annotation
-        # need to add it
-        ref_ids = ref_ann['obj_ids']
-        gt_ids = ann['obj_ids']
-        # compute matching of reference frame with current frame
-        # 0 denote there is no matching
-        # TODO 打印一下看看gt_pids
-        gt_pids = [ref_ids.index(i) + 1 if i in ref_ids else 0 for i in gt_ids]
-        if self.with_crowd:
-            gt_bboxes_ignore = ann['bboxes_ignore']
+        img_info = dict({'filename': vid_info['filenames'][frame_id],
+                         'height': vid_info['height'],
+                         'width': vid_info['width']
+                         })
+        ref_img_info = dict({'filename': vid_info['filenames'][ref_frame_id],
+                             'height': vid_info['height'],
+                             'width': vid_info['width']
+                             })
 
-        # skip the image if there is no valid gt bbox
-        if len(gt_bboxes) == 0:
-            return None
+        ann_info = self.get_ann_info(vid, frame_id)  # 得到了这一帧各个实例的ann
+        ref_ann_info = self.get_ann_info(vid, ref_frame_id)
 
-        # extra augmentation
-        if self.extra_aug is not None:  # is None
-            img, gt_bboxes, gt_labels = self.extra_aug(img, gt_bboxes,
-                                                       gt_labels)
+        results = dict(img_info=img_info, ann_info=ann_info)
+        ref_results = dict(img_info=ref_img_info, ann_info=ref_ann_info)
+        self.pre_pipeline(results)
+        self.pre_pipeline(ref_results)
+        data = self.pipeline(results)
+        ref_data = self.pipeline(ref_results)
+        data['ref_data'] = ref_data
 
-        # apply transforms
-        flip = True if np.random.rand() < self.flip_ratio else False  # 以多少概率进行翻转
-        img_scale = random_scale(self.img_scales)  # sample a scale
-        # img_shape是仅进行resize后的图片尺寸，pad_shape是进一步pad之后的img尺寸
-        img, img_shape, pad_shape, scale_factor = self.img_transform(
-            img, img_scale, flip, keep_ratio=self.resize_keep_ratio)  # keep_ratio == True
-        img = img.copy()
-        ref_img, ref_img_shape, _, ref_scale_factor = self.img_transform(
-            ref_img, img_scale, flip, keep_ratio=self.resize_keep_ratio)
-        ref_img = ref_img.copy()
-        if self.proposals is not None:
-            proposals = self.bbox_transform(proposals, img_shape, scale_factor,
-                                            flip)
-            proposals = np.hstack(
-                [proposals, scores]) if scores is not None else proposals
-        # bbox_transform是对bbox进行clip 不超过图片边界
-        gt_bboxes = self.bbox_transform(gt_bboxes, img_shape, scale_factor,
-                                        flip)  # TODO 感觉有点问题，这里似乎应该用pad_shape img_shape不是最终结果
-        ref_bboxes = self.bbox_transform(ref_bboxes, ref_img_shape, ref_scale_factor,
-                                         flip)
-        if self.aug_ref_bbox_param is not None:
-            ref_bboxes = self.bbox_aug(ref_bboxes, ref_img_shape)
-        if self.with_crowd:
-            gt_bboxes_ignore = self.bbox_transform(gt_bboxes_ignore, img_shape,
-                                                   scale_factor, flip)
-        if self.with_mask:
-            gt_masks = self.mask_transform(ann['masks'], pad_shape,
-                                           scale_factor, flip)
-
-        ori_shape = (vid_info['height'], vid_info['width'], 3)
-        img_meta = dict(
-            ori_shape=ori_shape,
-            img_shape=img_shape,
-            pad_shape=pad_shape,
-            scale_factor=scale_factor,
-            flip=flip)
-
-        data = dict(
-            img=DC(to_tensor(img), stack=True),
-            ref_img=DC(to_tensor(ref_img), stack=True),
-            img_meta=DC(img_meta, cpu_only=True),
-            gt_bboxes=DC(to_tensor(gt_bboxes)),
-            ref_bboxes=DC(to_tensor(ref_bboxes))
-        )
-        if self.proposals is not None:
-            data['proposals'] = DC(to_tensor(proposals))
-        if self.with_label:
-            data['gt_labels'] = DC(to_tensor(gt_labels))
-        if self.with_track:
-            data['gt_pids'] = DC(to_tensor(gt_pids))
-        if self.with_crowd:
-            data['gt_bboxes_ignore'] = DC(to_tensor(gt_bboxes_ignore))
-        if self.with_mask:
-            data['gt_masks'] = DC(gt_masks, cpu_only=True)
+        # gt_bboxes = ann['bboxes']  # 是二维数组
+        # gt_labels = ann['labels']
+        # ref_bboxes = ref_ann['bboxes']
+        # # obj ids attribute does not exist in current annotation
+        # # need to add it
+        # ref_ids = ref_ann['obj_ids']
+        # gt_ids = ann['obj_ids']
+        # # compute matching of reference frame with current frame
+        # # 0 denote there is no matching
+        # # TODO 打印一下看看gt_pids
+        # gt_pids = [ref_ids.index(i) + 1 if i in ref_ids else 0 for i in gt_ids]
+        # if self.with_crowd:
+        #     gt_bboxes_ignore = ann['bboxes_ignore']
+        #
+        # # skip the image if there is no valid gt bbox
+        # if len(gt_bboxes) == 0:
+        #     return None
+        #
+        # # # extra augmentation
+        # # if self.extra_aug is not None:  # is None
+        # #     img, gt_bboxes, gt_labels = self.extra_aug(img, gt_bboxes,
+        # #                                                gt_labels)
+        #
+        # # apply transforms
+        # flip = True if np.random.rand() < self.flip_ratio else False  # 以多少概率进行翻转
+        # img_scale = random_scale(self.img_scales)  # sample a scale
+        # # img_shape是仅进行resize后的图片尺寸，pad_shape是进一步pad之后的img尺寸
+        # img, img_shape, pad_shape, scale_factor = self.img_transform(
+        #     img, img_scale, flip, keep_ratio=self.resize_keep_ratio)  # keep_ratio == True
+        # img = img.copy()
+        # ref_img, ref_img_shape, _, ref_scale_factor = self.img_transform(
+        #     ref_img, img_scale, flip, keep_ratio=self.resize_keep_ratio)
+        # ref_img = ref_img.copy()
+        # if self.proposals is not None:
+        #     proposals = self.bbox_transform(proposals, img_shape, scale_factor,
+        #                                     flip)
+        #     proposals = np.hstack(
+        #         [proposals, scores]) if scores is not None else proposals
+        # # bbox_transform是对bbox进行clip 不超过图片边界
+        # gt_bboxes = self.bbox_transform(gt_bboxes, img_shape, scale_factor,
+        #                                 flip)  # TODO 感觉有点问题，这里似乎应该用pad_shape img_shape不是最终结果
+        # ref_bboxes = self.bbox_transform(ref_bboxes, ref_img_shape, ref_scale_factor,
+        #                                  flip)
+        # if self.aug_ref_bbox_param is not None:
+        #     ref_bboxes = self.bbox_aug(ref_bboxes, ref_img_shape)
+        # if self.with_crowd:
+        #     gt_bboxes_ignore = self.bbox_transform(gt_bboxes_ignore, img_shape,
+        #                                            scale_factor, flip)
+        # if self.with_mask:
+        #     gt_masks = self.mask_transform(ann['masks'], pad_shape,
+        #                                    scale_factor, flip)
+        #
+        # ori_shape = (vid_info['height'], vid_info['width'], 3)
+        # img_meta = dict(
+        #     filename=osp.join(self.img_prefix, vid_info['filenames'][frame_id]),
+        #     ori_filename=vid_info['filenames'][frame_id],
+        #     ori_shape=ori_shape,
+        #     img_shape=img_shape,
+        #     pad_shape=pad_shape,
+        #     scale_factor=scale_factor,
+        #     flip=flip)
+        #
+        # data = dict(
+        #     img=DC(to_tensor(img), stack=True),
+        #     ref_img=DC(to_tensor(ref_img), stack=True),
+        #     img_meta=DC(img_meta, cpu_only=True),
+        #     gt_bboxes=DC(to_tensor(gt_bboxes)),
+        #     ref_bboxes=DC(to_tensor(ref_bboxes))
+        # )
+        # if self.proposals is not None:
+        #     data['proposals'] = DC(to_tensor(proposals))
+        # if self.with_label:
+        #     data['gt_labels'] = DC(to_tensor(gt_labels))
+        # if self.with_track:
+        #     data['gt_pids'] = DC(to_tensor(gt_pids))
+        # if self.with_crowd:
+        #     data['gt_bboxes_ignore'] = DC(to_tensor(gt_bboxes_ignore))
+        # if self.with_mask:
+        #     data['gt_masks'] = DC(gt_masks, cpu_only=True)
         return data
 
     def prepare_test_img(self, idx):
@@ -388,9 +408,9 @@ class YTVISDataset(CustomDataset):
         # list of float.
         if with_mask:
             gt_masks = []
-            gt_mask_polys = []
-            gt_poly_lens = []
-        # TODO 打印一下i，应该有多个
+            # gt_mask_polys = []
+            # gt_poly_lens = []
+
         for i, ann in enumerate(ann_info):
             # each ann is a list of masks
             # ann:
@@ -398,7 +418,7 @@ class YTVISDataset(CustomDataset):
             # segmentation: list of segmentation
             # category_id
             # area: list of area
-            # TODO 打印一下len(bbox) 如果所有的长度都一样，说明数据是按照[None, []]的格式来组织的
+
             bbox = ann['bboxes'][frame_id]
             area = ann['areas'][frame_id]
             segm = ann['segmentations'][frame_id]
@@ -411,17 +431,20 @@ class YTVISDataset(CustomDataset):
                 gt_bboxes_ignore.append(bbox)
             else:
                 gt_bboxes.append(bbox)
-                gt_ids.append(ann['id'])
+                gt_ids.append(ann['id'])  # ann的主键: id
                 # self.cat2label: dict(cat_id: index) (index是从0开始的)
+                # gt_labels记录属于哪一类
                 gt_labels.append(self.cat2label[ann['category_id']])  # append的是index
-            if with_mask:
-                gt_masks.append(self.ytvos.annToMask(ann, frame_id))  # append: numpy 2D array
-                mask_polys = [
-                    p for p in segm if len(p) >= 6
-                ]  # valid polygons have >= 3 points (6 coordinates)
-                poly_lens = [len(p) for p in mask_polys]
-                gt_mask_polys.append(mask_polys)
-                gt_poly_lens.extend(poly_lens)
+                # TODO 检查这么写有没有问题，应该得保证gt_mask与gt_ids长度能对得上
+                if with_mask:
+                    gt_masks.append(segm)
+                    # mask_polys = [
+                    #     p for p in segm if len(p) >= 6
+                    # ]  # valid polygons have >= 3 points (6 coordinates)
+                    # poly_lens = [len(p) for p in mask_polys]
+                    # gt_mask_polys.append(mask_polys)
+                    # gt_poly_lens.extend(poly_lens)
+
         if gt_bboxes:
             gt_bboxes = np.array(gt_bboxes, dtype=np.float32)  # 变成二维数组了
             gt_labels = np.array(gt_labels, dtype=np.int64)
@@ -439,7 +462,7 @@ class YTVISDataset(CustomDataset):
 
         if with_mask:
             ann['masks'] = gt_masks  # 三维数组
-            # poly format is not used in the current implementation
-            ann['mask_polys'] = gt_mask_polys  # 三维数组
-            ann['poly_lens'] = gt_poly_lens
+            # # poly format is not used in the current implementation
+            # ann['mask_polys'] = gt_mask_polys  # 三维数组
+            # ann['poly_lens'] = gt_poly_lens
         return ann

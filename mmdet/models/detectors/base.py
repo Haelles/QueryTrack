@@ -233,6 +233,8 @@ class BaseDetector(BaseModule, metaclass=ABCMeta):
                 averaging the logs.
         """
         # 从epoch_base_runner.py: self.model.train_step 跳转进入这里
+        # run_iter: type(data['img']) == <class 'mmcv.parallel.data_container.DataContainer'>
+        # 但传入到这里时候type(data['img']) == <class 'torch.Tensor'>
         losses = self(**data)
         loss, log_vars = self._parse_losses(losses)
 

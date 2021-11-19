@@ -160,6 +160,9 @@ class QueryRoIHead(CascadeRoIHead):
         # csdn似乎有误，返回值bbox_feats应该是(batch * num_proposals, 256, 7, 7) （结合dii_head.py参数文档）
         bbox_feats = bbox_roi_extractor(x[:bbox_roi_extractor.num_inputs],
                                         rois)  # 前者为x^{FPN}，后者为b_{t-1}
+        # TODO 存疑在这里加上ref的还是单独设置一个head
+        # ref_bbox_feats =  bbox_roi_extractor(ref_x[:bbox_roi_extractor.num_inputs],
+        #                                         rois)
 
         # bbox_feats: x_{t}^{box}
         # 原来的object_feats: (batch_size, num_proposals, proposal_feature_channel)

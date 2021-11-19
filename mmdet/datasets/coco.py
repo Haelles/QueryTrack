@@ -75,9 +75,22 @@ class CocoDataset(CustomDataset):
         Returns:
             dict: Annotation info of specified index.
         """
-
+        # self.data_infos[idx]:
+        # {'license': 3, 'file_name': '000000391895.jpg',
+        #  'coco_url': 'http://images.cocodataset.org/train2017/000000391895.jpg', 'height': 360, 'width': 640,
+        #  'date_captured': '2013-11-14 11:18:45',
+        #  'flickr_url': 'http://farm9.staticflickr.com/8186/8119368305_4e622c8349_z.jpg', 'id': 391895,
+        #  'filename': '000000391895.jpg'}
         img_id = self.data_infos[idx]['id']
-        ann_ids = self.coco.get_ann_ids(img_ids=[img_id])
+        ann_ids = self.coco.get_ann_ids(img_ids=[img_id])  # list
+
+        # ann_info[0] {'segmentation': [ [200.69, 130.08, 199.66, 138.81, 199.66, 143.42, 209.92, 141.88, 215.56,
+        # 140.34, 215.56, 131.11, 220.18, 129.57, 222.23, 125.98, 222.23, 125.47, 224.8, 122.9, 230.95, 129.06,
+        # 236.6, 139.83, 235.57, 151.12, 240.19, 152.66, 242.75, 140.86, 238.13, 130.08, 227.87, 120.34, 228.9,
+        # 114.69, 239.16, 117.26, 236.08, 108.54, 230.95, 102.38, 224.8, 95.71, 207.87, 94.69, 196.07, 99.82, 192.99,
+        # 109.05, 190.94, 115.21, 182.73, 127.52, 178.63, 132.65, 184.27, 133.67, 188.37, 127.52, 191.96, 123.93,
+        # 196.58, 121.88, 198.12, 123.41, 199.15, 129.57, 199.66, 129.57]], 'area': 1652.7426000000003, 'iscrowd': 0,
+        # 'image_id': 88759, 'bbox': [178.63, 94.69, 64.12, 57.97], 'category_id': 64, 'id': 23931}
         ann_info = self.coco.load_anns(ann_ids)
         return self._parse_ann_info(self.data_infos[idx], ann_info)
 

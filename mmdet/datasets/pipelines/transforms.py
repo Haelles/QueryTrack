@@ -192,7 +192,7 @@ class Resize(object):
             scale, scale_idx = self.img_scale[0], 0
         elif self.multiscale_mode == 'range':
             scale, scale_idx = self.random_sample(self.img_scale)
-        elif self.multiscale_mode == 'value':
+        elif self.multiscale_mode == 'value':  # true
             scale, scale_idx = self.random_select(self.img_scale)
         else:
             raise NotImplementedError
@@ -287,7 +287,7 @@ class Resize(object):
                 assert isinstance(scale_factor, float)
                 results['scale'] = tuple(
                     [int(x * scale_factor) for x in img_shape][::-1])
-            else:
+            else:  # true
                 self._random_scale(results)
         else:
             if not self.override:
@@ -431,7 +431,7 @@ class RandomFlip(object):
                 direction_list = self.direction + [None]
             else:
                 # None means non-flip
-                direction_list = [self.direction, None]
+                direction_list = [self.direction, None]  # 执行这个
 
             if isinstance(self.flip_ratio, list):
                 non_flip_ratio = 1 - sum(self.flip_ratio)

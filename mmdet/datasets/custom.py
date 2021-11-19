@@ -210,8 +210,16 @@ class CustomDataset(Dataset):
             dict: Training data and annotation after pipeline with new keys \
                 introduced by pipeline.
         """
-
+        # img_info[i]:
+        # {'license': 3, 'file_name': '000000391895.jpg',
+        #  'coco_url': 'http://images.cocodataset.org/train2017/000000391895.jpg', 'height': 360, 'width': 640,
+        #  'date_captured': '2013-11-14 11:18:45',
+        #  'flickr_url': 'http://farm9.staticflickr.com/8186/8119368305_4e622c8349_z.jpg', 'id': 391895,
+        #  'filename': '000000391895.jpg'}
         img_info = self.data_infos[idx]
+
+        # ann_info
+        # coco: bboxes, labels, bboxes_ignore, masks, seg_map
         ann_info = self.get_ann_info(idx)
         results = dict(img_info=img_info, ann_info=ann_info)
         if self.proposals is not None:

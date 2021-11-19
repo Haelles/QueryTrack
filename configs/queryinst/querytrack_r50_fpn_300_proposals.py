@@ -46,7 +46,7 @@ model = dict(
         bbox_head=[
             dict(
                 type='DIIHead',
-                num_classes=80,
+                num_classes=40,
                 num_ffn_fcs=2,
                 num_heads=8,
                 num_cls_fcs=1,
@@ -81,6 +81,7 @@ model = dict(
         mask_head=[
             dict(
                 type='DynamicMaskHead',
+                num_classes=40,
                 dynamic_conv_cfg=dict(
                     type='DynamicConv',
                     in_channels=256,
