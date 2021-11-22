@@ -212,7 +212,7 @@ class BBoxHead(BaseModule):
             pos_gt_labels_list,
             cfg=rcnn_train_cfg)
 
-        if concat:
+        if concat:  # True
             labels = torch.cat(labels, 0)
             label_weights = torch.cat(label_weights, 0)
             bbox_targets = torch.cat(bbox_targets, 0)

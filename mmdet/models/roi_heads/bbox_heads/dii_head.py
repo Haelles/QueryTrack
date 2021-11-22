@@ -91,7 +91,7 @@ class DIIHead(BBoxHead):
         self.ffn_norm = build_norm_layer(dict(type='LN'), in_channels)[1]
 
         self.cls_fcs = nn.ModuleList()
-        for _ in range(num_cls_fcs):
+        for _ in range(num_cls_fcs):  # 1
             self.cls_fcs.append(
                 nn.Linear(in_channels, in_channels, bias=False))
             self.cls_fcs.append(
@@ -100,13 +100,13 @@ class DIIHead(BBoxHead):
                 build_activation_layer(dict(type='ReLU', inplace=True)))
 
         # over load the self.fc_cls in BBoxHead
-        if self.loss_cls.use_sigmoid:
+        if self.loss_cls.use_sigmoid:  # False
             self.fc_cls = nn.Linear(in_channels, self.num_classes)
         else:
             self.fc_cls = nn.Linear(in_channels, self.num_classes + 1)
 
         self.reg_fcs = nn.ModuleList()
-        for _ in range(num_reg_fcs):
+        for _ in range(num_reg_fcs):  # 3
             self.reg_fcs.append(
                 nn.Linear(in_channels, in_channels, bias=False))
             self.reg_fcs.append(
@@ -162,17 +162,18 @@ class DIIHead(BBoxHead):
                       and regression subnet, has shape
                       (batch_size, num_proposal, feature_dimensions).
         """
-        # proposal_feat对应上一阶段的object query，也即q_{t-1}
+        # proposal_feat对应上一阶段的object query，也即q_{t-1}  外部传进来时命名为object_feature，可见其对应object query
+        # roi_feat对应bbox的RoI Align
         N, num_proposals = proposal_feat.shape[:2]
 
-        # Self attention
-        proposal_feat = proposal_feat.permute(1, 0, 2)
+        # Self attention 对query进行注意力运算
+        proposal_feat = proposal_feat.permute(1, 0, 2)  # (b, n, 256) -> (n, b, 256)
         proposal_feat = self.attention_norm(self.attention(proposal_feat))
         # attn_feats: torch.Size([2, 100, 256])
         attn_feats = proposal_feat.permute(1, 0, 2)
 
         # instance interactive
-        # 下面这行相当于对attn_feats进行reshape --> ( ,256)
+        # 下面这行相当于对attn_feats进行reshape --> (b*n, 256)
         proposal_feat = proposal_feat.permute(1, 0,
                                               2).reshape(-1, self.in_channels)
         # proposal_feat_iic: torch.Size([200, 256])
@@ -183,12 +184,12 @@ class DIIHead(BBoxHead):
         # 残差连接
         proposal_feat = proposal_feat + self.instance_interactive_conv_dropout(
             proposal_feat_iic)
-        obj_feat = self.instance_interactive_conv_norm(proposal_feat)
+        obj_feat = self.instance_interactive_conv_norm(proposal_feat)  # (b, n, 256)
 
         # FFN
         # 如同csdn所说，实际代码中只有一个输出object query(B,N,256)，bbox预测和cls预测都是在此基础上进行的
         #  (batch_size*num_proposals, out_channels)
-        obj_feat = self.ffn_norm(self.ffn(obj_feat))
+        obj_feat = self.ffn_norm(self.ffn(obj_feat))  # (b, n, 256)
 
         cls_feat = obj_feat
         reg_feat = obj_feat
@@ -198,8 +199,8 @@ class DIIHead(BBoxHead):
         for reg_layer in self.reg_fcs:
             reg_feat = reg_layer(reg_feat)
 
-        cls_score = self.fc_cls(cls_feat).view(N, num_proposals, -1)
-        bbox_delta = self.fc_reg(reg_feat).view(N, num_proposals, -1)
+        cls_score = self.fc_cls(cls_feat).view(N, num_proposals, -1)  # torch.Size([2, 100, 80+1==81])
+        bbox_delta = self.fc_reg(reg_feat).view(N, num_proposals, -1)  # torch.Size([2, 100, 4])
         # cls_score, bbox_delta 对应beta_{t} obj_feat.view对应q_{t}^{*} attn_feats对应q_{t-1}^{*}
         return cls_score, bbox_delta, obj_feat.view(N, num_proposals, -1), attn_feats
 

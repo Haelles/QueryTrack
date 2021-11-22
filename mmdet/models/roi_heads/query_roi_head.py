@@ -162,9 +162,6 @@ class QueryRoIHead(CascadeRoIHead):
         # csdn似乎有误，返回值bbox_feats应该是(batch * num_proposals, 256, 7, 7) （结合dii_head.py参数文档）
         bbox_feats = bbox_roi_extractor(x[:bbox_roi_extractor.num_inputs],
                                         rois)  # 前者为x^{FPN}，后者为b_{t-1}
-        # TODO 存疑在这里加上ref的还是单独设置一个head
-        # ref_bbox_feats =  bbox_roi_extractor(ref_x[:bbox_roi_extractor.num_inputs],
-        #                                         rois)
 
         # bbox_feats: x_{t}^{box}
         # 原来的object_feats: (batch_size, num_proposals, proposal_feature_channel)
@@ -175,12 +172,14 @@ class QueryRoIHead(CascadeRoIHead):
         proposal_list = self.bbox_head[stage].refine_bboxes(
             rois,
             rois.new_zeros(len(rois)),  # dummy arg 意思是"虚拟/伪参数"
-            bbox_pred.view(-1, bbox_pred.size(-1)),
+            bbox_pred.view(-1, bbox_pred.size(-1)),  # torch.Size([2, 100, 4]) -> (2*100, 4)
             [rois.new_zeros(object_feats.size(1)) for _ in range(num_imgs)],
             img_metas)
+        # proposal torch.Size([100, 4])
+        # proposal torch.Size([100, 4])
         bbox_results = dict(
             cls_score=cls_score,
-            decode_bbox_pred=torch.cat(proposal_list),  # TODO 猜测是(batch, num_proposals, 4)
+            decode_bbox_pred=torch.cat(proposal_list),  # (batch, num_proposals, 4)
             object_feats=object_feats,
             attn_feats=attn_feats,
             # detach then use it in label assign
@@ -226,28 +225,26 @@ class QueryRoIHead(CascadeRoIHead):
         mask_results.update(loss_mask)
         return mask_results
 
-    def _track_forward(self, stage, x, rois, attn_feats, ref_x, ref_pos_rois):
+    def _track_forward(self, stage, x, rois, attn_feats, ref_x, ref_rois):
         track_roi_extractor = self.track_roi_extractor[stage]
         track_head = self.track_head[stage]
         # track_feats == x_{t}^{track}
         track_feats = track_roi_extractor(x[:track_roi_extractor.num_inputs],
                                           rois)  # x^{FPN}  b_{t}
         ref_track_feats = track_roi_extractor(ref_x[:track_roi_extractor.num_inputs],
-                                              ref_pos_rois)
-        track_pred = track_head(track_feats, ref_track_feats, attn_feats)
+                                              ref_rois)
+        match_score = track_head(track_feats, ref_track_feats, attn_feats)
+        return match_score
 
-        track_results = dict(track_pred=track_pred)
-        return track_results
-
-    def _track_forward_train(self, stage, x, attn_feats, sampling_results, ref_x, ref_rois):
-
+    def _track_forward_train(self, stage, x, attn_feats, sampling_results, ref_x, ref_rois, label):
+        # attn_feats torch.Size([2, 100, 256])
         pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
+        # TODO 需要实际验证一下，是像原任务那样使用所有的bbox作为roi，还是只使用pos_bbox
         attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, sampling_results)])
-        track_results = self._track_forward(stage, x, pos_rois, attn_feats, ref_x, ref_rois)
-
-        loss_track = self.track_head[stage].loss(track_results['mask_pred'],
-                                                 track_targets, pos_labels)
-        track_results.update(loss_track)
+        match_score = self._track_forward(stage, x, pos_rois, attn_feats, ref_x, ref_rois)
+        # match_score: tensor(len(pos_rois), len(ref_rois))
+        loss_track = self.track_head[stage].loss(match_score, label)
+        track_results = {'loss_track': loss_track}
         return track_results
 
     def forward_train(self,
@@ -261,7 +258,8 @@ class QueryRoIHead(CascadeRoIHead):
                       imgs_whwh=None,
                       gt_masks=None,
                       ref_data=None,
-                      ref_x=None):
+                      ref_x=None,
+                      gt_pids=None):
         """Forward function in training stage.
 
         Args:
@@ -289,6 +287,7 @@ class QueryRoIHead(CascadeRoIHead):
                 used if the architecture supports a segmentation task.
             ref_data (None | dict) : reference data.
             ref_x (list[Tensor]): list of multi-level ref_img features
+            gt_pids (list[Tensor]): Reference from key_ann to ref_ann
 
         Returns:
             dict[str, Tensor]: a dictionary of loss components of all stage.
@@ -362,8 +361,9 @@ class QueryRoIHead(CascadeRoIHead):
 
             # TODO self.with_track:
             if self.with_track:
+                ids = gt_pids[sampling_results.pos_assigned_gt_inds]  # 作为label
                 track_results = self._track_forward_train(stage, x, bbox_results['attn_feats'], sampling_results,
-                                                          ref_x, ref_rois)
+                                                          ref_x, ref_rois, ids)
                 single_stage_loss['loss_track'] = track_results['loss_track']
 
             for key, value in single_stage_loss.items():

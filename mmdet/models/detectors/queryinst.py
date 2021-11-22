@@ -21,6 +21,7 @@ class QueryInst(TwoStageDetector):
                       gt_masks=None,
                       proposals=None,
                       ref_data=None,
+                      gt_pids=None,
                       **kwargs):
         """
 
@@ -42,6 +43,7 @@ class QueryInst(TwoStageDetector):
             proposals (List[Tensor], optional): override rpn proposals with
                 custom proposals. Use when `with_rpn` is False.
             ref_data (None | dict) : reference data.
+            gt_pids (list[Tensor]): Reference from key_ann to ref_ann
 
         Returns:
             dict[str, Tensor]: a dictionary of loss components
@@ -73,7 +75,8 @@ class QueryInst(TwoStageDetector):
             gt_masks=gt_masks,
             imgs_whwh=imgs_whwh,
             ref_data=ref_data,
-            ref_x=ref_x)
+            ref_x=ref_x,
+            gt_pids=gt_pids)
         return roi_losses
 
     def simple_test(self, img, img_metas, rescale=False):

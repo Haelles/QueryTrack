@@ -2,6 +2,8 @@ import os.path as osp
 import warnings
 from collections import OrderedDict
 
+import torch
+
 from mmdet.core import eval_map, eval_recalls
 from .builder import DATASETS
 from .pipelines import Compose
@@ -252,6 +254,11 @@ class YTVISDataset(CustomDataset):
         data = self.pipeline(results)
         ref_data = self.pipeline(ref_results)
         data['ref_data'] = ref_data
+
+        gt_ids = ann_info['obj_ids']
+        ref_ids = ref_ann_info['obj_ids']
+        gt_pids = [ref_ids.index(i) + 1 if i in ref_ids else 0 for i in gt_ids]
+        data['gt_pids'] = DC(torch.tensor(gt_pids))
 
         # gt_bboxes = ann['bboxes']  # 是二维数组
         # gt_labels = ann['labels']

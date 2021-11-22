@@ -103,8 +103,8 @@ class TrackHead(nn.Module):
         ref_proposal_feat_iic = self.instance_interactive_conv(
             proposal_feat, ref_x)
         # TODO The probability of assigning label n to detected instance L_i
-        assert len(x_n) == len(ref_x_n)
-        if self.with_avg_pool:
+        assert len(x_n) == len(ref_x_n)  # batch_size
+        if self.with_avg_pool:  # False
             x = self.avg_pool(x)
             ref_x = self.avg_pool(ref_x)
         x = x.view(x.size(0), -1)
