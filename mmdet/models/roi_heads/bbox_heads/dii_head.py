@@ -184,12 +184,12 @@ class DIIHead(BBoxHead):
         # 残差连接
         proposal_feat = proposal_feat + self.instance_interactive_conv_dropout(
             proposal_feat_iic)
-        obj_feat = self.instance_interactive_conv_norm(proposal_feat)  # (b, n, 256)
+        obj_feat = self.instance_interactive_conv_norm(proposal_feat)  # (b*n, 256)
 
         # FFN
         # 如同csdn所说，实际代码中只有一个输出object query(B,N,256)，bbox预测和cls预测都是在此基础上进行的
         #  (batch_size*num_proposals, out_channels)
-        obj_feat = self.ffn_norm(self.ffn(obj_feat))  # (b, n, 256)
+        obj_feat = self.ffn_norm(self.ffn(obj_feat))  # (b*n, 256)
 
         cls_feat = obj_feat
         reg_feat = obj_feat

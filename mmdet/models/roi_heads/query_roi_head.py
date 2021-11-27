@@ -159,7 +159,7 @@ class QueryRoIHead(CascadeRoIHead):
         # TODO 上面写的rois是(num_proposal, 5)，应该是batch*num_proposal 需要打印看看
         # bbox_roi_extractor.num_inputs: 应该是 == 4  ( featmap_strides=[4, 8, 16, 32]
         # x: 比如[(B, 256, 200, 200), (B, 256, 100, 100), (B, 256, 50, 50), (B, 256, 25, 25)]
-        # csdn似乎有误，返回值bbox_feats应该是(batch * num_proposals, 256, 7, 7) （结合dii_head.py参数文档）
+        # csdn有误，返回值bbox_feats: (batch * num_proposals, 256, 7, 7)
         bbox_feats = bbox_roi_extractor(x[:bbox_roi_extractor.num_inputs],
                                         rois)  # 前者为x^{FPN}，后者为b_{t-1}
 
@@ -179,9 +179,9 @@ class QueryRoIHead(CascadeRoIHead):
         # proposal torch.Size([100, 4])
         bbox_results = dict(
             cls_score=cls_score,
-            decode_bbox_pred=torch.cat(proposal_list),  # (batch, num_proposals, 4)
-            object_feats=object_feats,
-            attn_feats=attn_feats,
+            decode_bbox_pred=torch.cat(proposal_list),  # (batch*num_proposals, 4)
+            object_feats=object_feats,  # q_{t} x_{t}^{box*}
+            attn_feats=attn_feats,   # attn_feats: torch.Size([batch, num_proposals, 256])
             # detach then use it in label assign
             detach_cls_score_list=[
                 cls_score[i].detach() for i in range(num_imgs)
@@ -211,6 +211,7 @@ class QueryRoIHead(CascadeRoIHead):
             loss_mask = sum([_.sum() for _ in self.mask_head[stage].parameters()]) * 0.
             return dict(loss_mask=loss_mask)
         pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
+        # attn_feats: torch.Size([batch, num_proposals, 256])
         attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, sampling_results)])
         # mask_results['mask_pred'] == m_{t} torch.Size([34, 80, 28, 28]) torch.Size([8, 80, 28, 28])
         mask_results = self._mask_forward(stage, x, pos_rois, attn_feats)
@@ -225,25 +226,29 @@ class QueryRoIHead(CascadeRoIHead):
         mask_results.update(loss_mask)
         return mask_results
 
-    def _track_forward(self, stage, x, rois, attn_feats, ref_x, ref_rois):
+    def _track_forward_train(self, stage, x, attn_feats, sampling_results, ref_x, ref_bboxes, label):
+        # attn_feats: torch.Size([batch, num_proposals, 256])
+        pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
+        bbox_img_n = [res.pos_bboxes.size(0) for res in sampling_results]
+        # TODO 需要实际验证一下，是像原任务那样使用所有的bbox作为roi，还是只使用pos_bbox
+        # TODO 可能需要在assign_result中添加gt_bbox，增加样本
+        bbox_attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, sampling_results)])
+
+        ref_rois = bbox2roi(ref_bboxes)
+        ref_bbox_img_n = [x.size(0) for x in ref_bboxes]
+        # TODO ref没有相应的query
+
         track_roi_extractor = self.track_roi_extractor[stage]
         track_head = self.track_head[stage]
         # track_feats == x_{t}^{track}
-        track_feats = track_roi_extractor(x[:track_roi_extractor.num_inputs],
-                                          rois)  # x^{FPN}  b_{t}
+        track_feats = track_roi_extractor(x[:track_roi_extractor.num_inputs],  # tuple 每个元素(b, c, h, w)
+                                          pos_rois)  # x^{FPN}  b_{t}
         ref_track_feats = track_roi_extractor(ref_x[:track_roi_extractor.num_inputs],
                                               ref_rois)
-        match_score = track_head(track_feats, ref_track_feats, attn_feats)
-        return match_score
-
-    def _track_forward_train(self, stage, x, attn_feats, sampling_results, ref_x, ref_rois, label):
-        # attn_feats torch.Size([2, 100, 256])
-        pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
-        # TODO 需要实际验证一下，是像原任务那样使用所有的bbox作为roi，还是只使用pos_bbox
-        attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, sampling_results)])
-        match_score = self._track_forward(stage, x, pos_rois, attn_feats, ref_x, ref_rois)
+        match_score = track_head(track_feats, ref_track_feats, attn_feats, bbox_img_n, ref_bbox_img_n)
         # match_score: tensor(len(pos_rois), len(ref_rois))
-        loss_track = self.track_head[stage].loss(match_score, label)
+        loss_track = track_head.loss(match_score, label)
+
         track_results = {'loss_track': loss_track}
         return track_results
 
@@ -302,7 +307,7 @@ class QueryRoIHead(CascadeRoIHead):
         proposal_list = [proposal_boxes[i] for i in range(len(proposal_boxes))]  # len: batch_size
         object_feats = proposal_features  # (batch_size, num_proposals, proposal_feature_channel)
         all_stage_loss = {}
-        ref_rois = bbox2roi(ref_data['ref_bboxes'])
+
         for stage in range(self.num_stages):
             rois = bbox2roi(proposal_list)  # (batch * num_proposals, 5) 5: img_index, x1, y1, x2, y2
             bbox_results = self._bbox_forward(stage, x, rois, object_feats,
@@ -363,7 +368,7 @@ class QueryRoIHead(CascadeRoIHead):
             if self.with_track:
                 ids = gt_pids[sampling_results.pos_assigned_gt_inds]  # 作为label
                 track_results = self._track_forward_train(stage, x, bbox_results['attn_feats'], sampling_results,
-                                                          ref_x, ref_rois, ids)
+                                                          ref_x, ref_data['ref_bboxes'], ids)
                 single_stage_loss['loss_track'] = track_results['loss_track']
 
             for key, value in single_stage_loss.items():

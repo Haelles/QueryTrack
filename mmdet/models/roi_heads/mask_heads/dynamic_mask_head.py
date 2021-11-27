@@ -92,7 +92,7 @@ class DynamicMaskHead(FCNMaskHead):
 
         proposal_feat = proposal_feat.reshape(-1, self.in_channels)
         proposal_feat_iic = self.instance_interactive_conv(
-            proposal_feat, roi_feat)
+            proposal_feat, roi_feat)  # (b*n, 256)
 
         x = proposal_feat_iic.permute(0, 2, 1).reshape(roi_feat.size())
 
