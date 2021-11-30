@@ -95,7 +95,6 @@ class CustomDataset(Dataset):
         # filter images too small and containing no annotations
         if not test_mode:
             valid_inds = self._filter_imgs()
-            # TODO 打印查看一下type
             # type == list
             # 值为0-11xxxx
             self.data_infos = [self.data_infos[i] for i in valid_inds]

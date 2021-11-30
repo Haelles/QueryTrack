@@ -100,7 +100,7 @@ class DIIHead(BBoxHead):
                 build_activation_layer(dict(type='ReLU', inplace=True)))
 
         # over load the self.fc_cls in BBoxHead
-        if self.loss_cls.use_sigmoid:  # False
+        if self.loss_cls.use_sigmoid:  # True
             self.fc_cls = nn.Linear(in_channels, self.num_classes)
         else:
             self.fc_cls = nn.Linear(in_channels, self.num_classes + 1)
@@ -254,14 +254,15 @@ class DIIHead(BBoxHead):
         bg_class_ind = self.num_classes
         # note in spare rcnn num_gt == num_pos
         pos_inds = (labels >= 0) & (labels < bg_class_ind)
-        num_pos = pos_inds.sum().float()
+        # labels torch.Size([200])
+        num_pos = pos_inds.sum().float()  # 10.0 5.0 -> avg_factor 10.0 5.0
         avg_factor = torch.clamp(reduce_mean(num_pos), min=1.).item()
         if cls_score is not None:
             if cls_score.numel() > 0:
                 losses['loss_cls'] = self.loss_cls(
                     cls_score,
-                    labels,
-                    label_weights,
+                    labels,  # (b*n, ) 对应的gt labels
+                    label_weights,  # (b*n, ) 其实都是1
                     avg_factor=avg_factor,
                     reduction_override=reduction_override)
                 losses['pos_acc'] = accuracy(cls_score[pos_inds],
@@ -341,14 +342,14 @@ class DIIHead(BBoxHead):
         # now use empty & fill because BG cat_id = num_classes,
         # FG cat_id = [0, num_classes-1]
         labels = pos_bboxes.new_full((num_samples, ),
-                                     self.num_classes,
+                                     self.num_classes,  # 设置的初始默认值 == 80
                                      dtype=torch.long)
         label_weights = pos_bboxes.new_zeros(num_samples)
         bbox_targets = pos_bboxes.new_zeros(num_samples, 4)
         bbox_weights = pos_bboxes.new_zeros(num_samples, 4)
         if num_pos > 0:
             labels[pos_inds] = pos_gt_labels
-            pos_weight = 1.0 if cfg.pos_weight <= 0 else cfg.pos_weight
+            pos_weight = 1.0 if cfg.pos_weight <= 0 else cfg.pos_weight  # 根据cfg可知设为了1
             label_weights[pos_inds] = pos_weight
             if not self.reg_decoded_bbox:
                 pos_bbox_targets = self.bbox_coder.encode(

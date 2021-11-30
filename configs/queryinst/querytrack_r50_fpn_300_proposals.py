@@ -115,6 +115,13 @@ model = dict(
                 fc_out_channels=1024,
                 roi_feat_size=7,
                 match_coeff=[1.0, 2.0, 10],
+                loss_tracking=dict(
+                    type='FocalLoss',
+                    use_sigmoid=False,
+                    use_softmax=True,
+                    gamma=2.0,
+                    alpha=0.25,  # TODO 这个参数不确定
+                    loss_weight=1.0),
 
                 dynamic_conv_cfg=dict(
                     type='DynamicConv',

@@ -236,16 +236,15 @@ class QueryRoIHead(CascadeRoIHead):
 
         ref_rois = bbox2roi(ref_bboxes)
         ref_bbox_img_n = [x.size(0) for x in ref_bboxes]
-        # TODO ref没有相应的query
 
         track_roi_extractor = self.track_roi_extractor[stage]
         track_head = self.track_head[stage]
         # track_feats == x_{t}^{track}
-        track_feats = track_roi_extractor(x[:track_roi_extractor.num_inputs],  # tuple 每个元素(b, c, h, w)
+        track_feats = track_roi_extractor(x[:track_roi_extractor.num_inputs],   # torch.Size([num_all, 256, 7, 7])
                                           pos_rois)  # x^{FPN}  b_{t}
         ref_track_feats = track_roi_extractor(ref_x[:track_roi_extractor.num_inputs],
                                               ref_rois)
-        match_score = track_head(track_feats, ref_track_feats, attn_feats, bbox_img_n, ref_bbox_img_n)
+        match_score = track_head(track_feats, ref_track_feats, bbox_attn_feats, bbox_img_n, ref_bbox_img_n)
         # match_score: tensor(len(pos_rois), len(ref_rois))
         loss_track = track_head.loss(match_score, label)
 
@@ -317,6 +316,7 @@ class QueryRoIHead(CascadeRoIHead):
                 # TODO support ignore
                 gt_bboxes_ignore = [None for _ in range(num_imgs)]
             sampling_results = []
+            ref_sampling_results = []
             cls_pred_list = bbox_results['detach_cls_score_list']
             proposal_list = bbox_results['detach_proposal_list']
             for i in range(num_imgs):
@@ -344,10 +344,21 @@ class QueryRoIHead(CascadeRoIHead):
                 sampling_result = self.bbox_sampler[stage].sample(
                     assign_result, proposal_list[i], gt_bboxes[i])
                 sampling_results.append(sampling_result)
+
+                # TODO 修改normolize_bbox_ccwh，从而获得ref的queries
+                with torch.no_grad():
+                    ref_assign_result = self.bbox_assigner[stage].assign(
+                    normolize_bbox_ccwh, cls_pred_list[i], gt_bboxes[i],
+                    gt_labels[i], img_metas[i])
+
+                    ref_sampling_result = self.bbox_sampler[stage].sample(
+                    ref_assign_result, proposal_list[i], gt_bboxes[i])
+                    ref_sampling_results.append(sampling_result)
+
             bbox_targets = self.bbox_head[stage].get_targets(
                 sampling_results, gt_bboxes, gt_labels, self.train_cfg[stage],
                 True)
-            cls_score = bbox_results['cls_score']
+            cls_score = bbox_results['cls_score']  # torch.Size([2, 100, 80])
             decode_bbox_pred = bbox_results['decode_bbox_pred']
             object_feats = bbox_results['object_feats']
 
@@ -366,7 +377,7 @@ class QueryRoIHead(CascadeRoIHead):
 
             # TODO self.with_track:
             if self.with_track:
-                ids = gt_pids[sampling_results.pos_assigned_gt_inds]  # 作为label
+                ids = gt_pids[sampling_results.pos_assigned_gt_inds]  # 作为label； sampling_result中已经-1了
                 track_results = self._track_forward_train(stage, x, bbox_results['attn_feats'], sampling_results,
                                                           ref_x, ref_data['ref_bboxes'], ids)
                 single_stage_loss['loss_track'] = track_results['loss_track']

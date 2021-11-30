@@ -3,9 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from mmcv.runner import auto_fp16, force_fp32
-from mmdet.core import (delta2bbox, multiclass_nms, bbox_target,
-                        weighted_cross_entropy, weighted_smoothl1, accuracy)
-from mmdet.models.builder import HEADS
+
+from mmdet.models.dense_heads.atss_head import reduce_mean
+from mmdet.models.losses import accuracy
+from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.utils import build_transformer
 
 
@@ -28,6 +29,12 @@ class TrackHead(nn.Module):
                      with_proj=True,
                      act_cfg=dict(type='ReLU', inplace=True),
                      norm_cfg=dict(type='LN')),
+                 loss_tracking=dict(
+                     type='FocalLoss',
+                     use_softmax=True,
+                     gamma=2.0,
+                     alpha=0.25,
+                     loss_weight=2.0),
                  with_avg_pool=False,
                  num_fcs=2,
                  in_channels=256,
@@ -60,6 +67,7 @@ class TrackHead(nn.Module):
 
         self.fp16_enabled = False
         self.instance_interactive_conv = build_transformer(dynamic_conv_cfg)
+        self.loss = build_loss(loss_tracking)
 
     def init_weights(self):
         # TODO 暂时设定为DynamicConv部分采用QueryInst的初始化方法、fc部分采用原任务提出者的初始化方法
@@ -98,23 +106,24 @@ class TrackHead(nn.Module):
         # we also add a all 0 column denote no matching
 
         proposal_feat = proposal_feat.reshape(-1, self.in_channels)
-        proposal_feat_iic = self.instance_interactive_conv(
-            proposal_feat, x)
-        ref_proposal_feat_iic = self.instance_interactive_conv(
-            proposal_feat, ref_x)
-        # TODO The probability of assigning label n to detected instance L_i
+        x = self.instance_interactive_conv(
+            proposal_feat, x)  # (b*n, 256)
+        ref_x = self.instance_interactive_conv(
+            proposal_feat, ref_x)  # (b*n, 256)
+
         assert len(x_n) == len(ref_x_n)  # batch_size
         if self.with_avg_pool:  # False
             x = self.avg_pool(x)
             ref_x = self.avg_pool(ref_x)
-        x = x.view(x.size(0), -1)
+        x = x.view(x.size(0), -1)  # num_all_proposals, 256*7*7
         ref_x = ref_x.view(ref_x.size(0), -1)
-        for idx, fc in enumerate(self.fcs):
+        for idx, fc in enumerate(self.fcs):  # 2层： (256*7*7, 1024) (1024, 1024)
             x = fc(x)
             ref_x = fc(ref_x)
             if idx < len(self.fcs) - 1:
                 x = self.relu(x)
                 ref_x = self.relu(ref_x)
+
         n = len(x_n)
         x_split = torch.split(x, x_n, dim=0)
         ref_x_split = torch.split(ref_x, ref_x_n, dim=0)
@@ -136,39 +145,27 @@ class TrackHead(nn.Module):
             match_score = torch.cat([dummy, prods_all], dim=2)
         return match_score
 
-    @force_fp32(apply_to=('track_pred',))
+    @force_fp32(apply_to=('match_score',))
     def loss(self,
              match_score,
              ids,
-             id_weights,
-             reduce=True):
+             reduction_override=None):
+        # TODO 检查avg_factor及其它
         losses = dict()
-        if self.dynamic:
-            n = len(match_score)
-            x_n = [s.size(0) for s in match_score]
-            ids = torch.split(ids, x_n, dim=0)
-            loss_match = 0.
-            match_acc = 0.
-            n_total = 0
-            batch_size = len(ids)
-            for score, cur_ids, cur_weights in zip(match_score, ids, id_weights):
-                valid_idx = torch.nonzero(cur_weights).squeeze()
-                if len(valid_idx.size()) == 0: continue
-                n_valid = valid_idx.size(0)
-                n_total += n_valid
-                loss_match += weighted_cross_entropy(
-                    score, cur_ids, cur_weights, reduce=reduce)
-                match_acc += accuracy(torch.index_select(score, 0, valid_idx),
-                                      torch.index_select(cur_ids, 0, valid_idx)) * n_valid
-            losses['loss_match'] = loss_match / n
-            if n_total > 0:
-                losses['match_acc'] = match_acc / n_total
-        else:
-            if match_score is not None:
-                valid_idx = torch.nonzero(cur_weights).squeeze()
-                losses['loss_match'] = weighted_cross_entropy(
-                    match_score, ids, id_weights, reduce=reduce)
-                losses['match_acc'] = accuracy(torch.index_select(match_score, 0, valid_idx),
-                                               torch.index_select(ids, 0, valid_idx))
+        pos_inds = ids > 0
+        num_samples = ids.size(0)
+        id_weights = match_score.new_zeros(num_samples)
+        id_weights[pos_inds] = 1.0
+        num_pos = pos_inds.sum().float()
+        avg_factor = torch.clamp(reduce_mean(num_pos), min=1.).item()
+
+        losses['loss_track'] = self.loss(
+            match_score,
+            ids,  # (b*n, ) 对应的ref gt labels
+            id_weights,  # (b*n, )
+            avg_factor=avg_factor,
+            reduction_override=reduction_override)
+        losses['match_acc'] = accuracy(match_score[pos_inds],
+                                     ids[pos_inds])
         return losses
 

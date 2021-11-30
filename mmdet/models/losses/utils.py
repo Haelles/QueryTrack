@@ -39,7 +39,7 @@ def weight_reduce_loss(loss, weight=None, reduction='mean', avg_factor=None):
     """
     # if weight is specified, apply element-wise weight
     if weight is not None:
-        loss = loss * weight
+        loss = loss * weight  # torch.Size([200, 80])
 
     # if avg_factor is not specified, just reduce the loss
     if avg_factor is None:

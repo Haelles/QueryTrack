@@ -123,12 +123,16 @@ class HungarianAssigner(BaseAssigner):
         iou_cost = self.iou_cost(bboxes, gt_bboxes)
         # weighted sum of above three costs
         cost = cls_cost + reg_cost + iou_cost
+        # cost.shape torch.Size([100, 5])
+        # cost.shape torch.Size([100, 13])
 
         # 3. do Hungarian matching on CPU using linear_sum_assignment
         cost = cost.detach().cpu()
         if linear_sum_assignment is None:
             raise ImportError('Please run "pip install scipy" '
                               'to install scipy first.')
+        # row行索引，也即对每个gt来说最合适的pred_bbox下标
+        # col列索引，每个pred_bbox最合适的gt_bbox
         matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
         matched_row_inds = torch.from_numpy(matched_row_inds).to(
             bbox_pred.device)
@@ -137,7 +141,7 @@ class HungarianAssigner(BaseAssigner):
 
         # 4. assign backgrounds and foregrounds
         # assign all indices to backgrounds first
-        assigned_gt_inds[:] = 0
+        assigned_gt_inds[:] = 0  # b*n
         # assign foregrounds based on matching results
         assigned_gt_inds[matched_row_inds] = matched_col_inds + 1
         assigned_labels[matched_row_inds] = gt_labels[matched_col_inds]
