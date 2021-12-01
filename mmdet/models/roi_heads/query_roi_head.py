@@ -181,7 +181,7 @@ class QueryRoIHead(CascadeRoIHead):
             cls_score=cls_score,
             decode_bbox_pred=torch.cat(proposal_list),  # (batch*num_proposals, 4)
             object_feats=object_feats,  # q_{t} x_{t}^{box*}
-            attn_feats=attn_feats,   # attn_feats: torch.Size([batch, num_proposals, 256])
+            attn_feats=attn_feats,  # attn_feats: torch.Size([batch, num_proposals, 256])
             # detach then use it in label assign
             detach_cls_score_list=[
                 cls_score[i].detach() for i in range(num_imgs)
@@ -226,21 +226,21 @@ class QueryRoIHead(CascadeRoIHead):
         mask_results.update(loss_mask)
         return mask_results
 
-    def _track_forward_train(self, stage, x, attn_feats, sampling_results, ref_x, ref_bboxes, label):
+    def _track_forward_train(self, stage, x, attn_feats, sampling_results, ref_x, ref_sampling_results, ref_bboxes, label):
         # attn_feats: torch.Size([batch, num_proposals, 256])
         pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
         bbox_img_n = [res.pos_bboxes.size(0) for res in sampling_results]
         # TODO 需要实际验证一下，是像原任务那样使用所有的bbox作为roi，还是只使用pos_bbox
         # TODO 可能需要在assign_result中添加gt_bbox，增加样本
         bbox_attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, sampling_results)])
-
-        ref_rois = bbox2roi(ref_bboxes)
-        ref_bbox_img_n = [x.size(0) for x in ref_bboxes]
+        # TODO 为了能让RoI得到的特征数目与queries数目对齐，使用了pos_assigned_gt_inds这个映射——正样本对应的ref_gt_bbox
+        ref_rois = bbox2roi([gt[res.pos_assigned_gt_inds] for (gt, res) in (ref_x, ref_sampling_results)])
+        ref_bbox_img_n = [res.pos_bboxes.size(0) for res in ref_sampling_results]
 
         track_roi_extractor = self.track_roi_extractor[stage]
         track_head = self.track_head[stage]
         # track_feats == x_{t}^{track}
-        track_feats = track_roi_extractor(x[:track_roi_extractor.num_inputs],   # torch.Size([num_all, 256, 7, 7])
+        track_feats = track_roi_extractor(x[:track_roi_extractor.num_inputs],  # torch.Size([num_all, 256, 7, 7])
                                           pos_rois)  # x^{FPN}  b_{t}
         ref_track_feats = track_roi_extractor(ref_x[:track_roi_extractor.num_inputs],
                                               ref_rois)
@@ -311,9 +311,12 @@ class QueryRoIHead(CascadeRoIHead):
             rois = bbox2roi(proposal_list)  # (batch * num_proposals, 5) 5: img_index, x1, y1, x2, y2
             bbox_results = self._bbox_forward(stage, x, rois, object_feats,
                                               img_metas)
+            with torch.no_grad():
+                ref_bbox_results = self._bbox_forward(stage, ref_x, rois, object_feats,
+                                                      ref_data['img_metas'])
             all_stage_bbox_results.append(bbox_results)
             if gt_bboxes_ignore is None:  # 执行
-                # TODO support ignore
+                # T support ignore
                 gt_bboxes_ignore = [None for _ in range(num_imgs)]
             sampling_results = []
             ref_sampling_results = []
@@ -345,15 +348,19 @@ class QueryRoIHead(CascadeRoIHead):
                     assign_result, proposal_list[i], gt_bboxes[i])
                 sampling_results.append(sampling_result)
 
-                # TODO 修改normolize_bbox_ccwh，从而获得ref的queries
+                # TODO 检查一下这么写对不对，通过bbox head提取ref frame的roi和cls_pred
                 with torch.no_grad():
+                    ref_cls_pred_list = ref_bbox_results['detach_cls_score_list']
+                    ref_proposal_list = ref_bbox_results['detach_proposal_list']
+                    ref_normolize_bbox_ccwh = bbox_xyxy_to_cxcywh(ref_proposal_list[i] /
+                                                                  ref_data['imgs_whwh'][i])
                     ref_assign_result = self.bbox_assigner[stage].assign(
-                    normolize_bbox_ccwh, cls_pred_list[i], gt_bboxes[i],
-                    gt_labels[i], img_metas[i])
+                        ref_normolize_bbox_ccwh, ref_cls_pred_list[i], ref_data['gt_bboxes'][i],
+                        ref_data['gt_labels'][i], ref_data['img_metas'][i])
 
                     ref_sampling_result = self.bbox_sampler[stage].sample(
-                    ref_assign_result, proposal_list[i], gt_bboxes[i])
-                    ref_sampling_results.append(sampling_result)
+                        ref_assign_result, ref_proposal_list[i], ref_data['gt_bboxes'][i])
+                    ref_sampling_results.append(ref_sampling_result)
 
             bbox_targets = self.bbox_head[stage].get_targets(
                 sampling_results, gt_bboxes, gt_labels, self.train_cfg[stage],
@@ -379,7 +386,7 @@ class QueryRoIHead(CascadeRoIHead):
             if self.with_track:
                 ids = gt_pids[sampling_results.pos_assigned_gt_inds]  # 作为label； sampling_result中已经-1了
                 track_results = self._track_forward_train(stage, x, bbox_results['attn_feats'], sampling_results,
-                                                          ref_x, ref_data['ref_bboxes'], ids)
+                                                          ref_x, ref_sampling_results, ref_data['ref_bboxes'], ids)
                 single_stage_loss['loss_track'] = track_results['loss_track']
 
             for key, value in single_stage_loss.items():

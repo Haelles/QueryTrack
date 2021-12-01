@@ -166,6 +166,5 @@ class TrackHead(nn.Module):
             avg_factor=avg_factor,
             reduction_override=reduction_override)
         losses['match_acc'] = accuracy(match_score[pos_inds],
-                                     ids[pos_inds])
+                                       ids[pos_inds])
         return losses
-
