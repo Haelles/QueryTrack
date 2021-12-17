@@ -24,6 +24,8 @@ class CascadeRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                  bbox_head=None,
                  mask_roi_extractor=None,
                  mask_head=None,
+                 track_roi_extractor=None,
+                 track_head=None,
                  shared_head=None,
                  train_cfg=None,
                  test_cfg=None,
@@ -41,6 +43,8 @@ class CascadeRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
             bbox_head=bbox_head,
             mask_roi_extractor=mask_roi_extractor,
             mask_head=mask_head,
+            track_roi_extractor=track_roi_extractor,
+            track_head=track_head,
             shared_head=shared_head,
             train_cfg=train_cfg,
             test_cfg=test_cfg,
@@ -94,6 +98,34 @@ class CascadeRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         else:
             self.share_roi_extractor = True
             self.mask_roi_extractor = self.bbox_roi_extractor
+
+    def init_track_head(self, track_roi_extractor, track_head):
+        """Initialize track head and track roi extractor.
+
+        Args:
+            track_roi_extractor (dict): Config of track roi extractor.
+            track_head (dict): Config of track in track head.
+        """
+        self.track_head = nn.ModuleList()
+        if not isinstance(track_head, list):
+            track_head = [track_head for _ in range(self.num_stages)]
+        assert len(track_head) == self.num_stages
+        for head in track_head:
+            self.track_head.append(build_head(head))
+        if track_roi_extractor is not None:
+            self.share_roi_extractor = False
+            self.track_roi_extractor = ModuleList()
+            if not isinstance(track_roi_extractor, list):
+                track_roi_extractor = [
+                    track_roi_extractor for _ in range(self.num_stages)
+                ]
+            assert len(track_roi_extractor) == self.num_stages
+            for roi_extractor in track_roi_extractor:
+                self.track_roi_extractor.append(
+                    build_roi_extractor(roi_extractor))
+        else:
+            self.share_roi_extractor = True
+            self.track_roi_extractor = self.bbox_roi_extractor
 
     def init_assigner_sampler(self):
         """Initialize assigner and sampler for each stage."""

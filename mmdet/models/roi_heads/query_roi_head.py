@@ -54,6 +54,11 @@ class QueryRoIHead(CascadeRoIHead):
                          type='RoIAlign', output_size=14, sampling_ratio=2),
                      out_channels=256,
                      featmap_strides=[4, 8, 16, 32]),
+                 track_roi_extractor=dict(
+                     type='SingleRoIExtractor',
+                     roi_layer=dict(type='RoIAlign', output_size=7, sampling_ratio=2),  # TODO 结合原任务选的size=7，后续检查一下
+                     out_channels=256,
+                     featmap_strides=[4, 8, 16, 32]),
                  bbox_head=dict(
                      type='DIIHead',
                      num_classes=80,
@@ -87,6 +92,30 @@ class QueryRoIHead(CascadeRoIHead):
                      norm_cfg=dict(type='BN'),
                      upsample_cfg=dict(type='deconv', scale_factor=2),
                      loss_dice=dict(type='DiceLoss', loss_weight=8.0)),
+                 track_head=dict(
+                     type='TrackHead',
+                     num_fcs=2,
+                     in_channels=256,
+                     fc_out_channels=1024,
+                     roi_feat_size=7,
+                     match_coeff=[1.0, 2.0, 10],
+                     loss_tracking=dict(
+                         type='FocalLoss',
+                         use_sigmoid=False,
+                         use_softmax=True,
+                         gamma=2.0,
+                         alpha=0.25,  # TODO 这个参数不确定
+                         loss_weight=1.0),
+
+                     dynamic_conv_cfg=dict(
+                         type='DynamicConv',
+                         in_channels=256,
+                         feat_channels=64,
+                         out_channels=256,
+                         input_feat_shape=7,
+                         with_proj=True,
+                         act_cfg=dict(type='ReLU', inplace=True),
+                         norm_cfg=dict(type='LN'))),
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None,
@@ -104,8 +133,10 @@ class QueryRoIHead(CascadeRoIHead):
             stage_loss_weights,
             bbox_roi_extractor=bbox_roi_extractor,
             mask_roi_extractor=mask_roi_extractor,
+            track_roi_extractor=track_roi_extractor,
             bbox_head=bbox_head,
             mask_head=mask_head,
+            track_head=track_head,
             train_cfg=train_cfg,
             test_cfg=test_cfg,
             pretrained=pretrained,
@@ -299,7 +330,8 @@ class QueryRoIHead(CascadeRoIHead):
 
         num_imgs = len(img_metas)  # batch
         num_proposals = proposal_boxes.size(1)
-        imgs_whwh = imgs_whwh.repeat(1, num_proposals, 1)
+        imgs_whwh = imgs_whwh.repeat(1, num_proposals, 1)  # (batch, num, 4)
+        ref_imgs_whwh = ref_data['imgs_whwh'].repeat(1, num_proposals, 1)
         all_stage_bbox_results = []
         # proposal_boxes: (batch_size ,num_proposals, 4)
         # proposal_list是构造出了len为batch_size，每个元素为(num_proposals, 4)的列表
@@ -353,7 +385,7 @@ class QueryRoIHead(CascadeRoIHead):
                     ref_cls_pred_list = ref_bbox_results['detach_cls_score_list']
                     ref_proposal_list = ref_bbox_results['detach_proposal_list']
                     ref_normolize_bbox_ccwh = bbox_xyxy_to_cxcywh(ref_proposal_list[i] /
-                                                                  ref_data['imgs_whwh'][i])
+                                                                  ref_imgs_whwh[i])
                     ref_assign_result = self.bbox_assigner[stage].assign(
                         ref_normolize_bbox_ccwh, ref_cls_pred_list[i], ref_data['gt_bboxes'][i],
                         ref_data['gt_labels'][i], ref_data['img_metas'][i])
@@ -382,7 +414,6 @@ class QueryRoIHead(CascadeRoIHead):
                                                         sampling_results, gt_masks, self.train_cfg[stage])
                 single_stage_loss['loss_mask'] = mask_results['loss_mask']
 
-            # TODO self.with_track:
             if self.with_track:
                 ids = gt_pids[sampling_results.pos_assigned_gt_inds]  # 作为label； sampling_result中已经-1了
                 track_results = self._track_forward_train(stage, x, bbox_results['attn_feats'], sampling_results,

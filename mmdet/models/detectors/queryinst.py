@@ -1,5 +1,6 @@
 from ..builder import DETECTORS
 from .two_stage import TwoStageDetector
+import torch
 
 
 @DETECTORS.register_module()
@@ -64,6 +65,13 @@ class QueryInst(TwoStageDetector):
         proposal_boxes, proposal_features, imgs_whwh = \
             self.rpn_head.forward_train(x, img_metas)
         #
+        ref_imgs_whwh = []
+        for meta in ref_data['img_metas']:
+            h, w, _ = meta['img_shape']
+            ref_imgs_whwh.append(ref_data['img'][0].new_tensor([[w, h, w, h]]))
+        ref_imgs_whwh = torch.cat(ref_imgs_whwh, dim=0)
+        ref_imgs_whwh = ref_imgs_whwh[:, None, :]
+        ref_data['imgs_whwh'] = ref_imgs_whwh
         roi_losses = self.roi_head.forward_train(
             x,
             proposal_boxes,
