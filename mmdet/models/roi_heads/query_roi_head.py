@@ -265,8 +265,9 @@ class QueryRoIHead(CascadeRoIHead):
         # TODO 可能需要在assign_result中添加gt_bbox，增加样本
         bbox_attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, sampling_results)])
         # TODO 为了能让RoI得到的特征数目与queries数目对齐，使用了pos_assigned_gt_inds这个映射——正样本对应的ref_gt_bbox
-        ref_rois = bbox2roi([gt[res.pos_assigned_gt_inds] for (gt, res) in (ref_x, ref_sampling_results)])
+        ref_rois = bbox2roi([ref_gt[res.pos_assigned_gt_inds] for (ref_gt, res) in zip(ref_bboxes, ref_sampling_results)])
         ref_bbox_img_n = [res.pos_bboxes.size(0) for res in ref_sampling_results]
+        ref_bbox_attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, ref_sampling_results)])
 
         track_roi_extractor = self.track_roi_extractor[stage]
         track_head = self.track_head[stage]
@@ -275,11 +276,11 @@ class QueryRoIHead(CascadeRoIHead):
                                           pos_rois)  # x^{FPN}  b_{t}
         ref_track_feats = track_roi_extractor(ref_x[:track_roi_extractor.num_inputs],
                                               ref_rois)
-        match_score = track_head(track_feats, ref_track_feats, bbox_attn_feats, bbox_img_n, ref_bbox_img_n)
-        # match_score: tensor(len(pos_rois), len(ref_rois))
+        match_score = track_head(track_feats, ref_track_feats, bbox_attn_feats, ref_bbox_attn_feats, bbox_img_n, ref_bbox_img_n)
+        # match_score: list tensor(len(pos_rois), len(ref_rois))
         loss_track = track_head.loss(match_score, label)
 
-        track_results = {'loss_track': loss_track}
+        track_results = loss_track
         return track_results
 
     def forward_train(self,
@@ -415,12 +416,17 @@ class QueryRoIHead(CascadeRoIHead):
                 single_stage_loss['loss_mask'] = mask_results['loss_mask']
 
             if self.with_track:
-                ids = gt_pids[sampling_results.pos_assigned_gt_inds]  # 作为label； sampling_result中已经-1了
+                ids = []  # 作为label； sampling_result中已经-1了
+                for (gt_pid, sampling_result) in zip(gt_pids, sampling_results):
+                    cur_id = gt_pid[sampling_result.pos_assigned_gt_inds]
+                    ids.append(cur_id)
                 track_results = self._track_forward_train(stage, x, bbox_results['attn_feats'], sampling_results,
-                                                          ref_x, ref_sampling_results, ref_data['ref_bboxes'], ids)
+                                                          ref_x, ref_sampling_results, ref_data['gt_bboxes'], ids)
                 single_stage_loss['loss_track'] = track_results['loss_track']
 
             for key, value in single_stage_loss.items():
+                # print(key)
+                # print(value)
                 all_stage_loss[f'stage{stage}_{key}'] = value * \
                                                         self.stage_loss_weights[stage]
 
