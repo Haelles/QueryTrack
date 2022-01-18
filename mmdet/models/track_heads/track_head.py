@@ -46,7 +46,6 @@ class TrackHead(nn.Module):
                  dynamic=True
                  ):
         super(TrackHead, self).__init__()
-        print(loss_tracking)
         self.in_channels = in_channels
         self.with_avg_pool = with_avg_pool
         self.roi_feat_size = roi_feat_size
@@ -120,7 +119,7 @@ class TrackHead(nn.Module):
             ref_x = self.avg_pool(ref_x)
         x = x.view(x.size(0), -1)  # num_all_proposals, 256*7*7
         ref_x = ref_x.view(ref_x.size(0), -1)
-        #
+        
         # print("--------------")
         # print(x.shape)
         # print(ref_x.shape)
@@ -136,8 +135,10 @@ class TrackHead(nn.Module):
         x_split = torch.split(x, x_n, dim=0)
         ref_x_split = torch.split(ref_x, ref_x_n, dim=0)
         prods = []
+        # print("current num: {n}".format(n=n))
         for i in range(n):
             prod = torch.mm(x_split[i], torch.transpose(ref_x_split[i], 0, 1))
+            # print("current prod {prod}".format(prod=prod))
             prods.append(prod)
         if self.dynamic:
             match_score = []
@@ -160,32 +161,36 @@ class TrackHead(nn.Module):
         # TODO 检查avg_factor及其它
         losses = dict()
 
-        n = len(match_score)  # batch_size
+        n = 0  # batch_size
         x_n = [s.size(0) for s in match_score]
-
+        
         loss_match = 0.
         match_acc = 0.
         n_total = 0
+        # print("loss track_head.py")
         for score, cur_ids in zip(match_score, ids):
             # pos_inds = ids > 0
             # print("score {score}".format(score=score.shape))
-            # print(cur_ids)
-            # pdb.set_trace()
+            # print("cur_ids {cur_ids}".format(cur_ids=cur_ids))
+            # pdb.set_trace()    
             num_samples = cur_ids.size(0)
-            id_weights = score.new_ones(num_samples)
-            # id_weights[pos_inds] = 1.0
-            num_pos = score.new_ones(num_samples).float().sum()
-            avg_factor = torch.clamp(reduce_mean(num_pos), min=1.).item()
-            # print("tracking loss")
-            loss_match += self.tracking_loss(
-                score,
-                cur_ids,  # (b*n, ) 对应的ref gt labels
-                id_weights,  # (b*n, )
-                avg_factor=avg_factor,
-                reduction_override=reduction_override)
-            n_total += num_samples
-            match_acc += accuracy(score, cur_ids)
-
+            if num_samples == 0:
+                loss_match += (score.sum() * 0.0)
+            else:
+                n += 1
+                id_weights = score.new_ones(num_samples)
+                # id_weights[pos_inds] = 1.0
+                num_pos = score.new_ones(num_samples).float().sum()
+                avg_factor = torch.clamp(reduce_mean(num_pos), min=1.).item()
+                loss_match += self.tracking_loss(
+                                        score,
+                                        cur_ids,  # (b*n, ) 对应的ref gt labels
+                                        id_weights,  # (b*n, )
+                                        avg_factor=avg_factor,
+                                        reduction_override=reduction_override)
+                n_total += num_samples
+                match_acc += accuracy(score, cur_ids)
+        # TODO 是否需要改一下这个n，之前continue那些是否需要考虑
         losses['loss_track'] = loss_match / n
         losses['match_acc'] = match_acc / n_total
         return losses

@@ -131,7 +131,7 @@ class YTVISDataset(CustomDataset):
         self.ytvos = YTVOS(ann_file)  # 在YTVOS类里进行了json.load
         self.cat_ids = self.ytvos.getCatIds()  # 40 categories
         self.cat2label = {
-            cat_id: i + 1
+            cat_id: i 
             for i, cat_id in enumerate(self.cat_ids)
         }
         self.vid_ids = self.ytvos.getVidIds()
@@ -139,6 +139,9 @@ class YTVISDataset(CustomDataset):
         for i in self.vid_ids:
             info = self.ytvos.loadVids([i])[0]  # 得到json中videos字段中的一个元素，包括id weight等
             info['filenames'] = info['file_names']
+            #if '281629cb41/00055.jpg'in info['filenames']:
+            #    import pdb
+            #    pdb.set_trace()
             vid_infos.append(info)
         return vid_infos
 
@@ -210,6 +213,8 @@ class YTVISDataset(CustomDataset):
 
     def prepare_train_img(self, idx):
         # prepare a pair of image in a sequence
+        # import pdb
+        # pdb.set_trace()
         vid, frame_id = idx  # type(idx) == tuple
         vid_info = self.vid_infos[vid]
         # # load image
@@ -247,19 +252,20 @@ class YTVISDataset(CustomDataset):
         ann_info = self.get_ann_info(vid, frame_id)  # 得到了这一帧各个实例的ann
         ref_ann_info = self.get_ann_info(vid, ref_frame_id)
 
-        results = dict(img_info=img_info, ann_info=ann_info)
-        ref_results = dict(img_info=ref_img_info, ann_info=ref_ann_info)
+        results = dict(img_info=img_info, ann_info=ann_info, ids=ann_info['obj_ids'])
+        ref_results = dict(img_info=ref_img_info, ann_info=ref_ann_info, ids=ref_ann_info['obj_ids'])
         self.pre_pipeline(results)
         self.pre_pipeline(ref_results)
         data = self.pipeline(results)
         ref_data = self.pipeline(ref_results)
+        if data is None or ref_data is None:
+            return None
         data['ref_data'] = ref_data
-
-        gt_ids = ann_info['obj_ids']
-        ref_ids = ref_ann_info['obj_ids']
-        gt_pids = [ref_ids.index(i) + 1 if i in ref_ids else 0 for i in gt_ids]
+        
+        gt_ids = data['img_metas'].data['ids']
+        ref_ids = ref_data['img_metas'].data['ids']
+        gt_pids = [ref_ids.index(i)+1 if i in ref_ids else 0 for i in gt_ids]
         data['gt_pids'] = DC(torch.tensor(gt_pids))
-
         # gt_bboxes = ann['bboxes']  # 是二维数组
         # gt_labels = ann['labels']
         # ref_bboxes = ref_ann['bboxes']
@@ -452,13 +458,18 @@ class YTVISDataset(CustomDataset):
                     # gt_mask_polys.append(mask_polys)
                     # gt_poly_lens.extend(poly_lens)
 
-        if gt_bboxes:
+        if gt_bboxes:  # gt_bboxes == []则为true
             gt_bboxes = np.array(gt_bboxes, dtype=np.float32)  # 变成二维数组了
             gt_labels = np.array(gt_labels, dtype=np.int64)
+            try:
+                test1 = gt_bboxes[0]
+                test2 = gt_bboxes[0, 1]
+            except:
+                import pdb
+                pdb.set_trace()
         else:
             gt_bboxes = np.zeros((0, 4), dtype=np.float32)
             gt_labels = np.array([], dtype=np.int64)
-
         if gt_bboxes_ignore:
             gt_bboxes_ignore = np.array(gt_bboxes_ignore, dtype=np.float32)
         else:

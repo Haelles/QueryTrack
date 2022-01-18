@@ -52,7 +52,7 @@ class BaseRoIHead(BaseModule, metaclass=ABCMeta):
     def with_track(self):
         """bool: whether the RoI head contains a `track_head`"""
         return hasattr(self, 'track_head') and self.track_head is not None
-
+    
     @property
     def with_shared_head(self):
         """bool: whether the RoI head contains a `shared_head`"""

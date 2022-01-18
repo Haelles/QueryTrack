@@ -544,7 +544,6 @@ class RandomShift(object):
                 label_key = self.bbox2label.get(key)
                 if label_key in results:
                     results[label_key] = results[label_key][valid_inds]
-
             for key in results.get('img_fields', ['img']):
                 img = results[key]
                 new_img = np.zeros_like(img)
@@ -790,7 +789,8 @@ class RandomCrop(object):
             label_key = self.bbox2label.get(key)
             if label_key in results:
                 results[label_key] = results[label_key][valid_inds]
-
+            if label_key == 'gt_labels' and 'ids' in results:
+                results['ids'] = np.array(results['ids'])[valid_inds].tolist()
             # mask fields, e.g. gt_masks and gt_masks_ignore
             mask_key = self.bbox2mask.get(key)
             if mask_key in results:

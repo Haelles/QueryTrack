@@ -16,6 +16,15 @@ def mask2results(mask_preds, det_labels, num_classes):
     return cls_segms
 
 
+def get_queries(pos_inds, pos_assigned_gt_inds, queries):
+    num_ref_gt = pos_inds.size(0)
+    len_single_query = queries[0].size(0)
+    res = queries.new_zeros([num_ref_gt, len_single_query])
+    for (pos_ind, pos_assigned_gt_ind) in zip(pos_inds, pos_assigned_gt_inds):
+        res[pos_assigned_gt_ind, :] = queries[pos_ind, :]
+    return res
+
+
 @HEADS.register_module()
 class QueryRoIHead(CascadeRoIHead):
     r"""
@@ -259,15 +268,27 @@ class QueryRoIHead(CascadeRoIHead):
 
     def _track_forward_train(self, stage, x, attn_feats, sampling_results, ref_x, ref_sampling_results, ref_bboxes, label):
         # attn_feats: torch.Size([batch, num_proposals, 256])
+        if sum([len(sampling_result.pos_inds) for sampling_result in sampling_results]) == 0:
+            print('Track Forward: Positive Results Not Found!')
+            loss_track = sum([_.sum() for _ in self.track_head[stage].parameters()]) * 0.
+            return dict(loss_track=loss_track)
+        if sum([len(ref_bbox) for ref_bbox in ref_bboxes]) == 0:
+            print('Track Forward: Ref_bbox Not Found!')
+            loss_track = sum([_.sum() for _ in self.track_head[stage].parameters()]) * 0.
+            return dict(loss_track=loss_track)
+        
         pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
         bbox_img_n = [res.pos_bboxes.size(0) for res in sampling_results]
         # TODO 需要实际验证一下，是像原任务那样使用所有的bbox作为roi，还是只使用pos_bbox
         # TODO 可能需要在assign_result中添加gt_bbox，增加样本
         bbox_attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, sampling_results)])
-        # TODO 为了能让RoI得到的特征数目与queries数目对齐，使用了pos_assigned_gt_inds这个映射——正样本对应的ref_gt_bbox
-        ref_rois = bbox2roi([ref_gt[res.pos_assigned_gt_inds] for (ref_gt, res) in zip(ref_bboxes, ref_sampling_results)])
-        ref_bbox_img_n = [res.pos_bboxes.size(0) for res in ref_sampling_results]
-        ref_bbox_attn_feats = torch.cat([feats[res.pos_inds] for (feats, res) in zip(attn_feats, ref_sampling_results)])
+        # TODO 匈牙利匹配的结果需要保证每个ref_gt_bbox对应一个pred_bbox，进而对应一个query
+        ref_rois = bbox2roi(ref_bboxes)
+        ref_bbox_img_n = [res.size(0) for res in ref_bboxes]
+        ref_bbox_attn_feats = torch.cat([
+            get_queries(ref_sampling_result.pos_inds, ref_sampling_result.pos_assigned_gt_inds, attn_feat)
+            for (attn_feat, ref_sampling_result) in zip(attn_feats, ref_sampling_results)
+        ])
 
         track_roi_extractor = self.track_roi_extractor[stage]
         track_head = self.track_head[stage]
@@ -328,7 +349,6 @@ class QueryRoIHead(CascadeRoIHead):
         Returns:
             dict[str, Tensor]: a dictionary of loss components of all stage.
         """
-
         num_imgs = len(img_metas)  # batch
         num_proposals = proposal_boxes.size(1)
         imgs_whwh = imgs_whwh.repeat(1, num_proposals, 1)  # (batch, num, 4)
@@ -362,7 +382,6 @@ class QueryRoIHead(CascadeRoIHead):
                 assign_result = self.bbox_assigner[stage].assign(
                     normolize_bbox_ccwh, cls_pred_list[i], gt_bboxes[i],
                     gt_labels[i], img_metas[i])
-
                 # < SamplingResult({
                 #     'neg_bboxes': torch.Size([90, 4]),
                 #     'neg_inds': tensor([0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
@@ -419,11 +438,15 @@ class QueryRoIHead(CascadeRoIHead):
                 ids = []  # 作为label； sampling_result中已经-1了
                 for (gt_pid, sampling_result) in zip(gt_pids, sampling_results):
                     cur_id = gt_pid[sampling_result.pos_assigned_gt_inds]
+                    # if cur_id.size(0) == 0:
+                    #    import pdb
+                    #    pdb.set_trace()
+                    #    print("cur_id size == 0 ")
+                    #    print("{pos}\n {gt_pid}".format(pos=sampling_result.pos_assigned_gt_inds, gt_pid=gt_pid))
                     ids.append(cur_id)
-                track_results = self._track_forward_train(stage, x, bbox_results['attn_feats'], sampling_results,
-                                                          ref_x, ref_sampling_results, ref_data['gt_bboxes'], ids)
+                track_results = self._track_forward_train(stage, x, bbox_results['attn_feats'], sampling_results, ref_x, ref_sampling_results, ref_data['gt_bboxes'], ids)
                 single_stage_loss['loss_track'] = track_results['loss_track']
-
+                # single_stage_loss['loss_track'] = mask_results['loss_mask'].new_ones(1).squeeze(0)
             for key, value in single_stage_loss.items():
                 # print(key)
                 # print(value)
