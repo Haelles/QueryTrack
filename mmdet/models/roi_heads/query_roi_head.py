@@ -272,6 +272,10 @@ class QueryRoIHead(CascadeRoIHead):
             print('Track Forward: Positive Results Not Found!')
             loss_track = sum([_.sum() for _ in self.track_head[stage].parameters()]) * 0.
             return dict(loss_track=loss_track)
+        if sum([len(ref_sampling_result.pos_inds) for ref_sampling_result in ref_sampling_results]) == 0:
+            print('Track Forward: Ref Positive Results Not Found!')
+            loss_track = sum([_.sum() for _ in self.track_head[stage].parameters()]) * 0.
+            return dict(loss_track=loss_track)
         if sum([len(ref_bbox) for ref_bbox in ref_bboxes]) == 0:
             print('Track Forward: Ref_bbox Not Found!')
             loss_track = sum([_.sum() for _ in self.track_head[stage].parameters()]) * 0.
@@ -363,8 +367,10 @@ class QueryRoIHead(CascadeRoIHead):
         for stage in range(self.num_stages):
             rois = bbox2roi(proposal_list)  # (batch * num_proposals, 5) 5: img_index, x1, y1, x2, y2
             bbox_results = self._bbox_forward(stage, x, rois, object_feats,
-                                              img_metas)
+                                              img_metas)  # rois: not requires_grad
             with torch.no_grad():
+                # 首先需要获得ref frame的q_{t-1}^{*}和b_{t}
+                # TODO 需要再考虑这样对不对 这里用了与key frame相同的rois b_{t-1}和object_feats q_{t-1}
                 ref_bbox_results = self._bbox_forward(stage, ref_x, rois, object_feats,
                                                       ref_data['img_metas'])
             all_stage_bbox_results.append(bbox_results)
@@ -373,12 +379,13 @@ class QueryRoIHead(CascadeRoIHead):
                 gt_bboxes_ignore = [None for _ in range(num_imgs)]
             sampling_results = []
             ref_sampling_results = []
-            cls_pred_list = bbox_results['detach_cls_score_list']
-            proposal_list = bbox_results['detach_proposal_list']
+            cls_pred_list = bbox_results['detach_cls_score_list']  # not requires_grad
+            proposal_list = bbox_results['detach_proposal_list']  # not requires_grad
             for i in range(num_imgs):
                 normolize_bbox_ccwh = bbox_xyxy_to_cxcywh(proposal_list[i] /
                                                           imgs_whwh[i])
                 # < AssignResult(num_gts=10, gt_inds.shape = (100,), max_overlaps = None, labels.shape = (100,)) >
+                # 从proposal_list[i]中采集正样本，这里最终得到的正样本数目等于gt bbox数目
                 assign_result = self.bbox_assigner[stage].assign(
                     normolize_bbox_ccwh, cls_pred_list[i], gt_bboxes[i],
                     gt_labels[i], img_metas[i])
@@ -414,12 +421,13 @@ class QueryRoIHead(CascadeRoIHead):
                         ref_assign_result, ref_proposal_list[i], ref_data['gt_bboxes'][i])
                     ref_sampling_results.append(ref_sampling_result)
 
+            # 返回的labels, label_weights, bbox_targets, bbox_weights代表着gt标签、gt bbox及权重
             bbox_targets = self.bbox_head[stage].get_targets(
                 sampling_results, gt_bboxes, gt_labels, self.train_cfg[stage],
                 True)
-            cls_score = bbox_results['cls_score']  # torch.Size([2, 100, 80])
-            decode_bbox_pred = bbox_results['decode_bbox_pred']
-            object_feats = bbox_results['object_feats']
+            cls_score = bbox_results['cls_score']  # torch.Size([2, 100, 80]) requires_grad
+            decode_bbox_pred = bbox_results['decode_bbox_pred']  # requires_grad
+            object_feats = bbox_results['object_feats']  # requires_grad
 
             single_stage_loss = self.bbox_head[stage].loss(
                 cls_score.view(-1, cls_score.size(-1)),
@@ -430,6 +438,7 @@ class QueryRoIHead(CascadeRoIHead):
             if self.with_mask:
                 # x: FPN
                 # bbox_results['attn_feats']: q_{t-1}^{*}
+                # bbox_results['attn_feats'] requires_grad
                 mask_results = self._mask_forward_train(stage, x, bbox_results['attn_feats'],
                                                         sampling_results, gt_masks, self.train_cfg[stage])
                 single_stage_loss['loss_mask'] = mask_results['loss_mask']

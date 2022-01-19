@@ -199,7 +199,7 @@ class DIIHead(BBoxHead):
         for reg_layer in self.reg_fcs:
             reg_feat = reg_layer(reg_feat)
 
-        cls_score = self.fc_cls(cls_feat).view(N, num_proposals, -1)  # torch.Size([2, 100, 80+1==81])
+        cls_score = self.fc_cls(cls_feat).view(N, num_proposals, -1)  # QueryInst：实际为[1, 100, 80]
         bbox_delta = self.fc_reg(reg_feat).view(N, num_proposals, -1)  # torch.Size([2, 100, 4])
         # cls_score, bbox_delta 对应beta_{t} obj_feat.view对应q_{t}^{*} attn_feats对应q_{t-1}^{*}
         return cls_score, bbox_delta, obj_feat.view(N, num_proposals, -1), attn_feats
