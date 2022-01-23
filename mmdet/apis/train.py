@@ -58,7 +58,7 @@ def train_detector(model,
                 f'Got "imgs_per_gpu"={cfg.data.imgs_per_gpu} and '
                 f'"samples_per_gpu"={cfg.data.samples_per_gpu}, "imgs_per_gpu"'
                 f'={cfg.data.imgs_per_gpu} is used in this experiments')
-        else:
+        else: 
             logger.warning(
                 'Automatically set "samples_per_gpu"="imgs_per_gpu"='
                 f'{cfg.data.imgs_per_gpu} in this experiments')

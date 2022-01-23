@@ -58,7 +58,9 @@ class QueryInst(TwoStageDetector):
         # csdn: ResNet50+FPN输出C2, C3, C4, C5四个分辨率的特征
         # 比如[(B, 256, 200, 200), (B, 256, 100, 100), (B, 256, 50, 50), (B, 256, 25, 25)]。
         x = self.extract_feat(img)
-        ref_x = self.extract_feat(ref_data['img'])
+        # TODO TO CHECK 参考帧这里似乎不需要梯度
+        with torch.no_grad():
+            ref_x = self.extract_feat(ref_data['img'])
         # proposal_boxes为(batch_size ,num_proposals, 4)
         # proposal_features (batch, num_proposals, proposal_feature_channel)
         # imgs_whwh (batch_size ,num_proposals, 4)

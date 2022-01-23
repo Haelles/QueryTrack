@@ -83,11 +83,11 @@ class TrackHead(nn.Module):
         # compute comprehensive matching score based on matchig likelihood,
         # bbox confidence, and ious
         if add_bbox_dummy:
-            bbox_iou_dummy = torch.ones(bbox_ious.size(0), 1,
-                                        device=torch.cuda.current_device()) * self.bbox_dummy_iou
+            # 结果为0 size(m, 1) 也即m个pred实例
+            bbox_iou_dummy = bbox_scores.new_ones(bbox_ious.size(0), 1) * self.bbox_dummy_iou
             bbox_ious = torch.cat((bbox_iou_dummy, bbox_ious), dim=1)
-            label_dummy = torch.ones(bbox_ious.size(0), 1,
-                                     device=torch.cuda.current_device())
+            # 结果为1 size(m, 1)
+            label_dummy = bbox_scores.new_ones(bbox_ious.size(0), 1)
             label_delta = torch.cat((label_dummy, label_delta), dim=1)
         if self.match_coeff is None:
             return match_ll
@@ -110,8 +110,10 @@ class TrackHead(nn.Module):
         ref_proposal_feat = ref_proposal_feat.reshape(-1, self.in_channels)
         x = self.instance_interactive_conv(
             proposal_feat, x)  # (b*n, 256)
-        ref_x = self.instance_interactive_conv(
-            ref_proposal_feat, ref_x)  # (b*n, 256)
+        # TODO TO CHECK 设定为参考帧得到的张量都不需要梯度       
+        with torch.no_grad():
+            ref_x = self.instance_interactive_conv(
+                ref_proposal_feat, ref_x)  # (b*n, 256)
 
         assert len(x_n) == len(ref_x_n)  # batch_size
         if self.with_avg_pool:  # False
@@ -126,7 +128,9 @@ class TrackHead(nn.Module):
         # print("in tracking forward")
         for idx, fc in enumerate(self.fcs):  # 2层： (256*7*7, 1024) (1024, 1024)
             x = fc(x)
-            ref_x = fc(ref_x)
+            # TODO TO CHECK 
+            with torch.no_grad():
+                ref_x = fc(ref_x)
             if idx < len(self.fcs) - 1:
                 x = self.relu(x)
                 ref_x = self.relu(ref_x)
@@ -184,12 +188,12 @@ class TrackHead(nn.Module):
                 avg_factor = torch.clamp(reduce_mean(num_pos), min=1.).item()
                 loss_match += self.tracking_loss(
                                         score,
-                                        cur_ids,  # (b*n, ) 对应的ref gt labels
-                                        id_weights,  # (b*n, )
+                                        cur_ids,  # (n, ) 对应的ref gt labels
+                                        id_weights,  # (n, )
                                         avg_factor=avg_factor,
                                         reduction_override=reduction_override)
                 n_total += num_samples
-                match_acc += accuracy(score, cur_ids)
+                match_acc += (accuracy(score, cur_ids) * num_samples)
         # TODO 是否需要改一下这个n，之前continue那些是否需要考虑
         losses['loss_track'] = loss_match / n
         losses['match_acc'] = match_acc / n_total

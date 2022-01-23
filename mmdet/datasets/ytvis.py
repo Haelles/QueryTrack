@@ -61,7 +61,7 @@ class YTVISDataset(CustomDataset):
             for frame_id in range(len(vid_info['filenames'])):
                 img_ids.append((idx, frame_id))  # type == tuple
         self.img_ids = img_ids  # 一系列元组，由在视频的编号idx和在视频内部唯一的编号frame_id组成
-        # TODO 打印看看
+
         if proposal_file is not None:
             self.proposals = self.load_proposals(proposal_file)
         else:
@@ -137,7 +137,7 @@ class YTVISDataset(CustomDataset):
         self.vid_ids = self.ytvos.getVidIds()
         vid_infos = []
         for i in self.vid_ids:
-            info = self.ytvos.loadVids([i])[0]  # 得到json中videos字段中的一个元素，包括id weight等
+            info = self.ytvos.loadVids([i])[0]  # 得到json中videos字段中的一个元素，包括id height等
             info['filenames'] = info['file_names']
             # if '281629cb41/00055.jpg'in info['filenames']:
             #    import pdb
@@ -212,33 +212,9 @@ class YTVISDataset(CustomDataset):
         results['seg_fields'] = []
 
     def prepare_train_img(self, idx):
-        # prepare a pair of image in a sequence
-        # import pdb
-        # pdb.set_trace()
         vid, frame_id = idx  # type(idx) == tuple
         vid_info = self.vid_infos[vid]
-        # # load image
-        # img = mmcv.imread(osp.join(self.img_prefix, vid_info['filenames'][frame_id]))  # ndarray
-        # basename = osp.basename(vid_info['filenames'][frame_id])
         _, ref_frame_id = self.sample_ref(idx)
-        # ref_img = mmcv.imread(osp.join(self.img_prefix, vid_info['filenames'][ref_frame_id]))
-        # # load proposals if necessary
-        # if self.proposals is not None:
-        #     proposals = self.proposals[idx][:self.num_max_proposals]
-        #     # TODO: Handle empty proposals properly. Currently images with
-        #     # no proposals are just ignored, but they can be used for
-        #     # training in concept.
-        #     if len(proposals) == 0:
-        #         return None
-        #     if not (proposals.shape[1] == 4 or proposals.shape[1] == 5):
-        #         raise AssertionError(
-        #             'proposals should have shapes (n, 4) or (n, 5), '
-        #             'but found {}'.format(proposals.shape))
-        #     if proposals.shape[1] == 5:
-        #         scores = proposals[:, 4, None]
-        #         proposals = proposals[:, :4]
-        #     else:
-        #         scores = None
 
         img_info = dict({'filename': vid_info['filenames'][frame_id],
                          'height': vid_info['height'],
@@ -274,138 +250,25 @@ class YTVISDataset(CustomDataset):
         if len(gt_pids) == 0:
             return None
 
-        # gt_bboxes = ann['bboxes']  # 是二维数组
-        # gt_labels = ann['labels']
-        # ref_bboxes = ref_ann['bboxes']
-        # # obj ids attribute does not exist in current annotation
-        # # need to add it
-        # ref_ids = ref_ann['obj_ids']
-        # gt_ids = ann['obj_ids']
-        # # compute matching of reference frame with current frame
-        # # 0 denote there is no matching
-        # # TODO 打印一下看看gt_pids
-        # gt_pids = [ref_ids.index(i) + 1 if i in ref_ids else 0 for i in gt_ids]
-        # if self.with_crowd:
-        #     gt_bboxes_ignore = ann['bboxes_ignore']
-        #
-        # # skip the image if there is no valid gt bbox
-        # if len(gt_bboxes) == 0:
-        #     return None
-        #
-        # # # extra augmentation
-        # # if self.extra_aug is not None:  # is None
-        # #     img, gt_bboxes, gt_labels = self.extra_aug(img, gt_bboxes,
-        # #                                                gt_labels)
-        #
-        # # apply transforms
-        # flip = True if np.random.rand() < self.flip_ratio else False  # 以多少概率进行翻转
-        # img_scale = random_scale(self.img_scales)  # sample a scale
-        # # img_shape是仅进行resize后的图片尺寸，pad_shape是进一步pad之后的img尺寸
-        # img, img_shape, pad_shape, scale_factor = self.img_transform(
-        #     img, img_scale, flip, keep_ratio=self.resize_keep_ratio)  # keep_ratio == True
-        # img = img.copy()
-        # ref_img, ref_img_shape, _, ref_scale_factor = self.img_transform(
-        #     ref_img, img_scale, flip, keep_ratio=self.resize_keep_ratio)
-        # ref_img = ref_img.copy()
-        # if self.proposals is not None:
-        #     proposals = self.bbox_transform(proposals, img_shape, scale_factor,
-        #                                     flip)
-        #     proposals = np.hstack(
-        #         [proposals, scores]) if scores is not None else proposals
-        # # bbox_transform是对bbox进行clip 不超过图片边界
-        # gt_bboxes = self.bbox_transform(gt_bboxes, img_shape, scale_factor,
-        #                                 flip)  # TODO 感觉有点问题，这里似乎应该用pad_shape img_shape不是最终结果
-        # ref_bboxes = self.bbox_transform(ref_bboxes, ref_img_shape, ref_scale_factor,
-        #                                  flip)
-        # if self.aug_ref_bbox_param is not None:
-        #     ref_bboxes = self.bbox_aug(ref_bboxes, ref_img_shape)
-        # if self.with_crowd:
-        #     gt_bboxes_ignore = self.bbox_transform(gt_bboxes_ignore, img_shape,
-        #                                            scale_factor, flip)
-        # if self.with_mask:
-        #     gt_masks = self.mask_transform(ann['masks'], pad_shape,
-        #                                    scale_factor, flip)
-        #
-        # ori_shape = (vid_info['height'], vid_info['width'], 3)
-        # img_meta = dict(
-        #     filename=osp.join(self.img_prefix, vid_info['filenames'][frame_id]),
-        #     ori_filename=vid_info['filenames'][frame_id],
-        #     ori_shape=ori_shape,
-        #     img_shape=img_shape,
-        #     pad_shape=pad_shape,
-        #     scale_factor=scale_factor,
-        #     flip=flip)
-        #
-        # data = dict(
-        #     img=DC(to_tensor(img), stack=True),
-        #     ref_img=DC(to_tensor(ref_img), stack=True),
-        #     img_meta=DC(img_meta, cpu_only=True),
-        #     gt_bboxes=DC(to_tensor(gt_bboxes)),
-        #     ref_bboxes=DC(to_tensor(ref_bboxes))
-        # )
-        # if self.proposals is not None:
-        #     data['proposals'] = DC(to_tensor(proposals))
-        # if self.with_label:
-        #     data['gt_labels'] = DC(to_tensor(gt_labels))
-        # if self.with_track:
-        #     data['gt_pids'] = DC(to_tensor(gt_pids))
-        # if self.with_crowd:
-        #     data['gt_bboxes_ignore'] = DC(to_tensor(gt_bboxes_ignore))
-        # if self.with_mask:
-        #     data['gt_masks'] = DC(gt_masks, cpu_only=True)
         return data
 
     def prepare_test_img(self, idx):
         """Prepare an image for testing (multi-scale and flipping)"""
-        vid, frame_id = idx
+        vid, frame_id = idx  # both start from 0
         vid_info = self.vid_infos[vid]
-        img = mmcv.imread(osp.join(self.img_prefix, vid_info['filenames'][frame_id]))
-        proposal = None
 
-        def prepare_single(img, frame_id, scale, flip, proposal=None):
-            _img, img_shape, pad_shape, scale_factor = self.img_transform(
-                img, scale, flip, keep_ratio=self.resize_keep_ratio)
-            _img = to_tensor(_img)
-            _img_meta = dict(
-                ori_shape=(vid_info['height'], vid_info['width'], 3),
-                img_shape=img_shape,
-                pad_shape=pad_shape,
-                is_first=(frame_id == 0),
-                video_id=vid,
-                frame_id=frame_id,
-                scale_factor=scale_factor,
-                flip=flip)
-            if proposal is not None:
-                if proposal.shape[1] == 5:
-                    score = proposal[:, 4, None]
-                    proposal = proposal[:, :4]
-                else:
-                    score = None
-                _proposal = self.bbox_transform(proposal, img_shape,
-                                                scale_factor, flip)
-                _proposal = np.hstack(
-                    [_proposal, score]) if score is not None else _proposal
-                _proposal = to_tensor(_proposal)
-            else:
-                _proposal = None
-            return _img, _img_meta, _proposal
+        img_info = dict(filename=vid_info[frame_id],
+                        height=vid_info['height'],
+                        weight=vid_info['weight']
+                    )
 
-        imgs = []
-        img_metas = []
-        proposals = []
-        for scale in self.img_scales:
-            _img, _img_meta, _proposal = prepare_single(
-                img, frame_id, scale, False, proposal)
-            imgs.append(_img)
-            img_metas.append(DC(_img_meta, cpu_only=True))
-            proposals.append(_proposal)
-            if self.flip_ratio > 0:
-                _img, _img_meta, _proposal = prepare_single(
-                    img, scale, True, proposal)
-                imgs.append(_img)
-                img_metas.append(DC(_img_meta, cpu_only=True))
-                proposals.append(_proposal)
-        data = dict(img=imgs, img_meta=img_metas)
+        results = dict(img_info=img_info)
+        self.pre_pipeline(results)
+        results = self.pipeline(results)
+        results['img_metas'].data['video_id'] = vid
+        results['img_metas'].data['frame_id'] = frame_id
+        results['img_metas'].data['is_first'] = (frame_id == 0)
+
         return data
 
     def _parse_ann_info(self, ann_info, frame_id, with_mask=True):

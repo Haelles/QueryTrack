@@ -47,8 +47,9 @@ train_pipeline = [
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
+        # TODO 感觉应该在transform的Resize中添加各个scale，然而结合论文来看只改MultiScaleFlipAug的img_scale就行
         type='MultiScaleFlipAug',
-        img_scale=(1333, 800),
+        img_scale=(1333, 640),
         flip=False,
         transforms=[
             dict(type='Resize', keep_ratio=True),
@@ -71,10 +72,18 @@ data = dict(
         type=dataset_type,
         ann_file=data_root + 'test/instances.json',
         img_prefix=data_root + 'test/JPEGImages/',
-        pipeline=test_pipeline),
+        pipeline=test_pipeline,
+        with_mask=False,
+        with_label=False,
+        test_mode=True,
+        with_track=True),
     test=dict(
         type=dataset_type,
         ann_file=data_root + 'valid/instances.json',
         img_prefix=data_root + 'valid/JPEGImages',
-        pipeline=test_pipeline))
+        pipeline=test_pipeline,
+        with_mask=False,
+        with_label=False,
+        test_mode=True,
+        with_track=True))
 evaluation = dict(metric=['bbox', 'segm'])

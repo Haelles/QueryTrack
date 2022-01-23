@@ -149,7 +149,8 @@ model = dict(
                 mask_size=28,
                 debug=False) for _ in range(num_stages)
         ]),
-    test_cfg=dict(rpn=None, rcnn=dict(max_per_img=num_proposals, mask_thr_binary=0.5, nms=dict(type='nms', iou_threshold=0.7))))
+    # max_pre_img这里根据论文设置为10，原为num_proposals
+    test_cfg=dict(rpn=None, rcnn=dict(max_per_img=10, mask_thr_binary=0.5, nms=dict(type='nms', iou_threshold=0.7))))
 
 # optimizer
 optimizer = dict(_delete_=True, type='AdamW', lr=0.000025, weight_decay=0.0001)

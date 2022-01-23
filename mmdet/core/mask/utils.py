@@ -46,11 +46,11 @@ def encode_mask_results(mask_results):
     """
     if isinstance(mask_results, tuple):  # mask scoring
         cls_segms, cls_mask_scores = mask_results
-    else:
+    else:  # True class == list
         cls_segms = mask_results
     num_classes = len(cls_segms)
     encoded_mask_results = [[] for _ in range(num_classes)]
-    for i in range(len(cls_segms)):
+    for i in range(len(cls_segms)):  # 80
         for cls_segm in cls_segms[i]:
             encoded_mask_results[i].append(
                 mask_util.encode(
