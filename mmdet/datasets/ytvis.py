@@ -56,6 +56,8 @@ class YTVISDataset(CustomDataset):
 
         # load annotations (and proposals)
         self.vid_infos = self.load_annotations(ann_file)  # "videos"
+        # import pdb
+        # pdb.set_trace()
         img_ids = []
         for idx, vid_info in enumerate(self.vid_infos):
             for frame_id in range(len(vid_info['filenames'])):
@@ -117,6 +119,8 @@ class YTVISDataset(CustomDataset):
         return len(self.img_ids)
 
     def __getitem__(self, idx):
+        # import pdb
+        # pdb.set_trace()
         if self.test_mode:
             return self.prepare_test_img(self.img_ids[idx])
 
@@ -257,19 +261,19 @@ class YTVISDataset(CustomDataset):
         vid, frame_id = idx  # both start from 0
         vid_info = self.vid_infos[vid]
 
-        img_info = dict(filename=vid_info[frame_id],
+        img_info = dict(filename=vid_info['file_names'][frame_id],
                         height=vid_info['height'],
-                        weight=vid_info['weight']
+                        width=vid_info['width']
                     )
 
         results = dict(img_info=img_info)
         self.pre_pipeline(results)
         results = self.pipeline(results)
-        results['img_metas'].data['video_id'] = vid
-        results['img_metas'].data['frame_id'] = frame_id
-        results['img_metas'].data['is_first'] = (frame_id == 0)
+        results['img_metas'][0].data['video_id'] = vid
+        results['img_metas'][0].data['frame_id'] = frame_id
+        results['img_metas'][0].data['is_first'] = (frame_id == 0)
 
-        return data
+        return results
 
     def _parse_ann_info(self, ann_info, frame_id, with_mask=True):
         """Parse bbox and mask annotation.

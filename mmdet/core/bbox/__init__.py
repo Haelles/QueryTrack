@@ -8,7 +8,7 @@ from .samplers import (BaseSampler, CombinedSampler,
                        InstanceBalancedPosSampler, IoUBalancedNegSampler,
                        OHEMSampler, PseudoSampler, RandomSampler,
                        SamplingResult, ScoreHLRSampler)
-from .transforms import (bbox2distance, bbox2result, bbox2roi,
+from .transforms import (bbox2distance, bbox2result, bbox2roi, bbox2result_with_id,
                          bbox_cxcywh_to_xyxy, bbox_flip, bbox_mapping,
                          bbox_mapping_back, bbox_rescale, bbox_xyxy_to_cxcywh,
                          distance2bbox, roi2bbox)
@@ -19,7 +19,7 @@ __all__ = [
     'InstanceBalancedPosSampler', 'IoUBalancedNegSampler', 'CombinedSampler',
     'OHEMSampler', 'SamplingResult', 'ScoreHLRSampler', 'build_assigner',
     'build_sampler', 'bbox_flip', 'bbox_mapping', 'bbox_mapping_back',
-    'bbox2roi', 'roi2bbox', 'bbox2result', 'distance2bbox', 'bbox2distance',
+    'bbox2roi', 'roi2bbox', 'bbox2result', 'bbox2result_with_id', 'distance2bbox', 'bbox2distance',
     'build_bbox_coder', 'BaseBBoxCoder', 'PseudoBBoxCoder',
     'DeltaXYWHBBoxCoder', 'TBLRBBoxCoder', 'CenterRegionAssigner',
     'bbox_rescale', 'bbox_cxcywh_to_xyxy', 'bbox_xyxy_to_cxcywh',

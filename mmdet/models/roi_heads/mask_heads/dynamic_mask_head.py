@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from mmcv import imresize
 from mmcv.cnn import (bias_init_with_prob, build_activation_layer,
                       build_norm_layer, ConvModule, Conv2d, build_upsample_layer)
 from mmcv.runner import auto_fp16, force_fp32
@@ -10,6 +11,7 @@ from mmdet.models.dense_heads.atss_head import reduce_mean
 from mmdet.models.utils import build_transformer
 
 from .fcn_mask_head import FCNMaskHead
+import numpy as np
 
 
 @HEADS.register_module()
@@ -131,3 +133,67 @@ class DynamicMaskHead(FCNMaskHead):
         mask_targets = mask_target(pos_proposals, pos_assigned_gt_inds,
                                    gt_masks, rcnn_train_cfg)
         return mask_targets
+
+    # def get_seg_masks(self, mask_pred, det_bboxes, det_labels, rcnn_test_cfg,
+    #                   ori_shape, scale_factor, rescale, det_obj_ids=None):
+    #     """Get segmentation masks from mask_pred and bboxes.
+
+    #     Args:
+    #         mask_pred (Tensor or ndarray): shape (n, #class, h, w).
+    #             For single-scale testing, mask_pred is the direct output of
+    #             model, whose type is Tensor, while for multi-scale testing,
+    #             it will be converted to numpy array outside of this method.
+    #         det_bboxes (Tensor): shape (n, 4/5)
+    #         det_labels (Tensor): shape (n, )
+    #         img_shape (Tensor): shape (3, )
+    #         rcnn_test_cfg (dict): rcnn testing config
+    #         ori_shape: original image size
+
+    #     Returns:
+    #         list[list]: encoded masks
+    #     """
+    #     if isinstance(mask_pred, torch.Tensor):
+    #         mask_pred = mask_pred.sigmoid().cpu().numpy()
+    #     assert isinstance(mask_pred, np.ndarray)
+
+    #     cls_segms = [[] for _ in range(self.num_classes)]  # TODO TO CHECK 原任务这里为self.num_classes - 1
+    #     if det_obj_ids is not None:
+    #         obj_segms = {}
+    #     bboxes = det_bboxes.cpu().numpy()[:, :4]
+    #     labels = det_labels.cpu().numpy()  # TODO TO CHECK + 1
+    #     scale_factor = scale_factor.cpu().numpy()
+
+    #     if rescale:
+    #         img_h, img_w = ori_shape[:2]
+    #     else:
+    #         img_h = np.round(ori_shape[0] * scale_factor).astype(np.int32)
+    #         img_w = np.round(ori_shape[1] * scale_factor).astype(np.int32)
+    #         scale_factor = 1.0
+
+    #     for i in range(bboxes.shape[0]):
+    #         bbox = (bboxes[i, :] / scale_factor).astype(np.int32)  # 还原为原图尺寸
+    #         label = labels[i]
+    #         w = max(bbox[2] - bbox[0] + 1, 1)
+    #         h = max(bbox[3] - bbox[1] + 1, 1)
+
+    #         if not self.class_agnostic:  # True
+    #             mask_pred_ = mask_pred[i, label, :, :]
+    #         else:
+    #             mask_pred_ = mask_pred[i, 0, :, :]
+    #         im_mask = np.zeros((img_h, img_w), dtype=np.uint8)
+
+    #         bbox_mask = imresize(mask_pred_, (w, h))  # 将(28,28)的mask分数转变为原图bbox区域的mask分数
+    #         bbox_mask = (bbox_mask > rcnn_test_cfg.mask_thr_binary).astype(
+    #             np.uint8)  # 原图bbox区域的mask完全生成
+    #         im_mask[bbox[1]:bbox[1] + h, bbox[0]:bbox[0] + w] = bbox_mask  # 构造出当前实例的0-1mask
+    #         rle = mask_util.encode(
+    #             np.array(im_mask[:, :, np.newaxis], order='F'))[0]
+    #         if det_obj_ids is not None:
+    #             if det_obj_ids[i] >= 0:
+    #                 obj_segms[det_obj_ids[i]] = rle
+    #         else:
+    #             cls_segms[label].append(rle)
+    #     if det_obj_ids is not None:
+    #         return obj_segms
+    #     else:
+    #         return cls_segms

@@ -12,6 +12,8 @@ from torch.nn.modules.utils import _pair
 from mmdet.core import mask_target
 from mmdet.models.builder import HEADS, build_loss
 
+import pycocotools.mask as mask_util
+
 BYTES_PER_FLOAT = 4
 # TODO: This memory limit may be too much or too little. It would be better to
 # determine it based on available resources.
@@ -174,7 +176,7 @@ class FCNMaskHead(BaseModule):
         return loss
 
     def get_seg_masks(self, mask_pred, det_bboxes, det_labels, rcnn_test_cfg,
-                      ori_shape, scale_factor, rescale, format=True):
+                      ori_shape, scale_factor, rescale, det_obj_ids=None, format=True):
         """Get segmentation masks from mask_pred and bboxes.
 
         Args:
@@ -222,22 +224,23 @@ class FCNMaskHead(BaseModule):
             >>> assert len(encoded_masks) == C
             >>> assert sum(list(map(len, encoded_masks))) == N
         """
+        # QueryInst 每次单张图片输入
         if isinstance(mask_pred, torch.Tensor):
-            mask_pred = mask_pred.sigmoid()
+            mask_pred = mask_pred.sigmoid()  # QueryInst torch.Size([100, 80, 28, 28])
         else:
             mask_pred = det_bboxes.new_tensor(mask_pred)
 
         device = mask_pred.device
         cls_segms = [[] for _ in range(self.num_classes)
                      ]  # BG is not included in num_classes
-        bboxes = det_bboxes[:, :4]
+        bboxes = det_bboxes[:, :4]  # QueryInst torch.Size([100, 4])
         labels = det_labels
         # No need to consider rescale and scale_factor while exporting to ONNX
-        if torch.onnx.is_in_onnx_export():
+        if torch.onnx.is_in_onnx_export():  # QueryInst False
             img_h, img_w = ori_shape[:2]
         else:
-            if rescale:
-                img_h, img_w = ori_shape[:2]
+            if rescale:  # QueryInst True
+                img_h, img_w = ori_shape[:2]  # (427, 640, 3)
             else:
                 if isinstance(scale_factor, float):
                     img_h = np.round(ori_shape[0] * scale_factor).astype(
@@ -300,9 +303,12 @@ class FCNMaskHead(BaseModule):
             dtype=torch.bool if threshold >= 0 else torch.uint8)
 
         if not self.class_agnostic:
+            # torch.Size([100, 80, 28, 28]) -> torch.Size([100, 1, 28, 28])
             mask_pred = mask_pred[range(N), labels][:, None]
 
         for inds in chunks:
+            # gpu: len(inds) == 100
+            # gpu: torch.Size([100, 427, 640])
             masks_chunk, spatial_inds = _do_paste_mask(
                 mask_pred[inds],
                 bboxes[inds],
@@ -317,10 +323,22 @@ class FCNMaskHead(BaseModule):
                 masks_chunk = (masks_chunk * 255).to(dtype=torch.uint8)
 
             im_mask[(inds, ) + spatial_inds] = masks_chunk
-
+        # im_mask torch.Size([100, 427, 640])
+        # 下面为尝试修改
+        if det_obj_ids is not None:
+            obj_segms = {}
         for i in range(N):
-            cls_segms[labels[i]].append(im_mask[i].detach().cpu().numpy())
-        return cls_segms if format else im_mask
+            if det_obj_ids is not None:
+                if det_obj_ids[i] >= 0:
+                    temp = im_mask[i].detach().cpu().numpy()
+                    rle = mask_util.encode(np.array(temp[:, :, np.newaxis], order='F', dtype='uint8'))[0]
+                    obj_segms[det_obj_ids[i]] = rle
+            else:  # 先不改
+                cls_segms[labels[i]].append(im_mask[i].detach().cpu().numpy())
+        if det_obj_ids is not None:
+            return obj_segms
+        else:
+            return cls_segms
 
 
 def _do_paste_mask(masks, boxes, img_h, img_w, skip_empty=True):
@@ -367,10 +385,12 @@ def _do_paste_mask(masks, boxes, img_h, img_w, skip_empty=True):
 
     N = masks.shape[0]
 
-    img_y = torch.arange(y0_int, y1_int, device=device).to(torch.float32) + 0.5
+    img_y = torch.arange(y0_int, y1_int, device=device).to(torch.float32) + 0.5  # torch.Size([427])
     img_x = torch.arange(x0_int, x1_int, device=device).to(torch.float32) + 0.5
-    img_y = (img_y - y0) / (y1 - y0) * 2 - 1
-    img_x = (img_x - x0) / (x1 - x0) * 2 - 1
+    # img_y - y0 torch.Size([300, 427])
+    # y0 [300, 1]
+    img_y = (img_y - y0) / (y1 - y0) * 2 - 1  # torch.Size([300, 427])
+    img_x = (img_x - x0) / (x1 - x0) * 2 - 1  # torch.Size([300, 640])
     # img_x, img_y have shapes (N, w), (N, h)
     # IsInf op is not supported with ONNX<=1.7.0
     if not torch.onnx.is_in_onnx_export():
@@ -381,14 +401,15 @@ def _do_paste_mask(masks, boxes, img_h, img_w, skip_empty=True):
             inds = torch.where(torch.isinf(img_y))
             img_y[inds] = 0
 
-    gx = img_x[:, None, :].expand(N, img_y.size(1), img_x.size(1))
-    gy = img_y[:, :, None].expand(N, img_y.size(1), img_x.size(1))
-    grid = torch.stack([gx, gy], dim=3)
+    gx = img_x[:, None, :].expand(N, img_y.size(1), img_x.size(1))  # torch.Size([300, 427, 640])
+    gy = img_y[:, :, None].expand(N, img_y.size(1), img_x.size(1))  # torch.Size([300, 427, 640])
+    grid = torch.stack([gx, gy], dim=3)  # torch.Size([300, 427, 640, 2])
 
+    # torch.Size([100, 1, 28, 28]) -> torch.Size([100, 1, 427, 640])
     img_masks = F.grid_sample(
         masks.to(dtype=torch.float32), grid, align_corners=False)
 
     if skip_empty:
         return img_masks[:, 0], (slice(y0_int, y1_int), slice(x0_int, x1_int))
-    else:
+    else:  # torch.Size([100, 1, 427, 640]) -> torch.Size([100, 427, 640])
         return img_masks[:, 0], ()

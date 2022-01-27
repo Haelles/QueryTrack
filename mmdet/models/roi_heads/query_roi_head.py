@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from mmdet.core import bbox2result, bbox2roi, bbox_xyxy_to_cxcywh, bbox_flip
+from mmdet.core import bbox2result, bbox2result_with_id,bbox2roi, bbox_xyxy_to_cxcywh, bbox_flip
 from mmdet.core.bbox.samplers import PseudoSampler
 from mmdet.core import bbox_overlaps
 from ..builder import HEADS
@@ -161,6 +161,7 @@ class QueryRoIHead(CascadeRoIHead):
         self.prev_bboxes =  None
         self.prev_roi_feats = None
         self.prev_det_labels = None
+        self.prev_attn_feats = None
 
 
     def _bbox_forward(self, stage, x, rois, object_feats, img_metas):
@@ -523,6 +524,9 @@ class QueryRoIHead(CascadeRoIHead):
         ms_segm_result = {}
 
         object_feats = proposal_features
+        bbox_results = {}
+        # import pdb
+        # pdb.set_trace()
         for stage in range(self.num_stages):
             rois = bbox2roi(proposal_list)
             bbox_results = self._bbox_forward(stage, x, rois, object_feats,
@@ -556,36 +560,31 @@ class QueryRoIHead(CascadeRoIHead):
                 0, 1).topk(
                 self.test_cfg.max_per_img, sorted=False)
             # TODO TO CHECK 参考MaskTrackRCNN设置一个0.05的threshold
-            topk_indices = topk_indices[cls_score_per_img > 0.05]
+            topk_indices = topk_indices[scores_per_img > 0.05]
+            scores_per_img = scores_per_img[scores_per_img > 0.05]
             labels_per_img = topk_indices % num_classes  # 取余数 第几类 可能重复
             bbox_pred_per_img = proposal_list[img_id][topk_indices //
                                                       num_classes]  # 整除 第几个bbox 可能重复
             if rescale:
-                print("rescale == True perform rescale")
                 scale_factor = img_metas[img_id]['scale_factor']
                 bbox_pred_per_img /= bbox_pred_per_img.new_tensor(scale_factor)
             det_bboxes.append(
                 torch.cat([bbox_pred_per_img, scores_per_img[:, None]], dim=1))  # (10, 4) (10, 1) -> (10, 5)
             det_labels.append(labels_per_img)  # (10, )
 
-        bbox_results = [
-            # 可能出现一个实例对应两个label/两个类的情况
-            bbox2result(det_bboxes[i], det_labels[i], num_classes)
-            for i in range(num_imgs)
-        ]
-        ms_bbox_result['ensemble'] = bbox_results
-
         # 进入tracking模块
         det_obj_ids=np.array([], dtype=np.int64)
-        if det_bboxes[0].nelement()==0:
+        is_first = img_metas[0]['is_first']
+        # 设定每次只有一张图片，所以下面直接取0了
+        det_bboxes = det_bboxes[0]
+        det_labels = det_labels[0]  # (n, )
+        if det_bboxes.nelement()==0:
             if is_first:
                 self.prev_bboxes =  None
                 self.prev_roi_feats = None
                 self.prev_det_labels = None
+                self.prev_topk_indices = None
         else:
-            # 设定每次只有一张图片，所以下面直接取0了
-            det_bboxes = det_bboxes[0]
-            det_labels = det_labels[0]  # (n, )
             res_det_bboxes = det_bboxes.clone()
             if rescale:  # 如果rescale==True 这里要变回resize后的尺寸
                 scale_factor = res_det_bboxes.new_tensor(img_metas[0]['scale_factor'])
@@ -593,26 +592,33 @@ class QueryRoIHead(CascadeRoIHead):
 
             det_rois = bbox2roi([res_det_bboxes])
             det_roi_feats = self.track_roi_extractor[stage](
-                x[:self.track_roi_extractor.num_inputs], det_rois)
+                x[:self.track_roi_extractor[stage].num_inputs], det_rois)
             # 根据得到的bbox计算x_{t}^{track}
-            
+            # import pdb
+            # pdb.set_trace()
             if is_first or (not is_first and self.prev_bboxes is None):
                 # 是视频第一帧，或不是第一帧但之前没有任何bbox预测结果
-                det_obj_ids = np.arange(det_bboxes.size(0))  # (n, )
+                det_obj_ids = np.arange(det_bboxes.size(0))  # (n, ) det_bboxes是原图尺寸
                 # save bbox and features for later matching
                 self.prev_bboxes = det_bboxes
-                self.prev_roi_feats = det_roi_feats
+                self.prev_roi_feats = det_roi_feats  #  类似(batch * num_proposals, 256, 7, 7)
                 self.prev_det_labels = det_labels
+                self.prev_attn_feats = torch.cat([bbox_results['attn_feats'][0][topk_indice // num_classes][None] for topk_indice in topk_indices])
             else:
                 assert self.prev_roi_feats is not None
                 assert self.prev_bboxes is not None
                 # only support one image at a time
                 bbox_img_n = [det_bboxes.size(0)]
                 prev_bbox_img_n = [self.prev_roi_feats.size(0)]
+
+                bbox_attn_feats = torch.cat([bbox_results['attn_feats'][0][topk_indice // num_classes][None] for topk_indice in topk_indices])
+                prev_bbox_attn_feats = self.prev_attn_feats
+
                 match_score = self.track_head[stage](det_roi_feats, self.prev_roi_feats,
+                                        bbox_attn_feats, prev_bbox_attn_feats,
                                         bbox_img_n, prev_bbox_img_n)[0]
                 match_logprob = torch.nn.functional.log_softmax(match_score, dim=1)
-                label_delta = (self.prev_det_labels == det_labels).float()
+                label_delta = (self.prev_det_labels == det_labels.view(-1, 1)).float()  # MaskTrack torch.Size([2, 4])
                 # TODO TO CHECK 这里或许也可以改成原任务自己改的代码
                 bbox_ious = bbox_overlaps(det_bboxes[:,:4], self.prev_bboxes[:,:4])
                 # compute comprehensive score 
@@ -636,6 +642,7 @@ class QueryRoIHead(CascadeRoIHead):
                         self.prev_roi_feats = torch.cat((self.prev_roi_feats, det_roi_feats[idx][None]), dim=0)
                         self.prev_bboxes = torch.cat((self.prev_bboxes, det_bboxes[idx][None]), dim=0)
                         self.prev_det_labels = torch.cat((self.prev_det_labels, det_labels[idx][None]), dim=0)
+                        self.prev_attn_feats = torch.cat((self.prev_attn_feats, bbox_attn_feats[idx][None]), dim=0)
                     else:
                         # 之前的实例可能与本帧中多个实例匹配，选分数最高的那一个来对应之前的实例
                         obj_id = match_id - 1
@@ -646,6 +653,12 @@ class QueryRoIHead(CascadeRoIHead):
                             # udpate feature
                             self.prev_roi_feats[obj_id] = det_roi_feats[idx]
                             self.prev_bboxes[obj_id] = det_bboxes[idx]
+                            self.prev_attn_feats[obj_id] = bbox_attn_feats[idx]
+        # import pdb
+        # pdb.set_trace()
+        # 可能出现一个实例对应两个label/两个类的情况 det_bboxes是原图尺寸
+        bbox_results = bbox2result_with_id(det_bboxes, det_labels, det_obj_ids, num_classes)
+        ms_bbox_result['ensemble'] = bbox_results
 
         if self.with_mask:
             if rescale and not isinstance(scale_factors[0], float):
@@ -654,12 +667,12 @@ class QueryRoIHead(CascadeRoIHead):
                     for scale_factor in scale_factors
                 ]
             _bboxes = [
-                det_bboxes[i][:, :4] *
-                scale_factors[i] if rescale else det_bboxes[i][:, :4]
-                for i in range(len(det_bboxes))
-            ]
+                det_bboxes[:, :4] *
+                scale_factors[0] if rescale else det_bboxes[:, :4]
+            ]  # 非原图尺寸
+            det_labels = [det_labels]
             segm_results = []
-            mask_pred = mask_results['mask_pred']
+            mask_pred = mask_results['mask_pred']  # (b, n, 80, 28, 28)
             for img_id in range(num_imgs):
                 # 每个query/pred bbox都有num_classes个mask
                 # mask_pred[img_id] (n, 80, 28, 28) -> (n*80, 28, 28)
@@ -670,18 +683,15 @@ class QueryRoIHead(CascadeRoIHead):
                 segm_result = self.mask_head[-1].get_seg_masks(
                     mask_pred_per_img, _bboxes[img_id], det_labels[img_id],
                     self.test_cfg, ori_shapes[img_id], scale_factors[img_id],
-                    rescale)
+                    rescale, det_obj_ids=det_obj_ids)  # 修改后返回的是一个dict
                 segm_results.append(segm_result)
 
-            ms_segm_result['ensemble'] = segm_results
+            ms_segm_result['ensemble'] = segm_results[0]
 
         if self.with_mask:
-            results = list(
-                zip(ms_bbox_result['ensemble'], ms_segm_result['ensemble']))
+            return ms_bbox_result['ensemble'], ms_segm_result['ensemble']
         else:
-            results = ms_bbox_result['ensemble']
-
-        return results
+            return ms_bbox_result['ensemble']
 
     def aug_test(self,
                  aug_x,

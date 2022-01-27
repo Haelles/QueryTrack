@@ -14,6 +14,7 @@ from mmdet.apis import multi_gpu_test, single_gpu_test
 from mmdet.datasets import (build_dataloader, build_dataset,
                             replace_ImageToTensor)
 from mmdet.models import build_detector
+import numpy as np
 
 
 def parse_args():
@@ -185,9 +186,12 @@ def main():
         model.CLASSES = dataset.CLASSES
 
     if not distributed:
-        model = MMDataParallel(model, device_ids=[0])
+        model = MMDataParallel(model, device_ids=[1])
         outputs = single_gpu_test(model, data_loader, args.show, args.show_dir,
                                   args.show_score_thr)
+        # import pickle
+        # with open('/var/lib/docker/data/users/yupeng/tracking/QueryTrack/results.pkl', 'rb') as f:
+        #     outputs = pickle.load(f)
     else:
         model = MMDistributedDataParallel(
             model.cuda(),
@@ -201,10 +205,12 @@ def main():
         if args.out:
             print(f'\nwriting results to {args.out}')
             mmcv.dump(outputs, args.out)
+            result_file = args.out + '.json'
+            results2json_videoseg(dataset, outputs, result_file)
         kwargs = {} if args.eval_options is None else args.eval_options
         if args.format_only:
             dataset.format_results(outputs, **kwargs)
-        if args.eval:
+        if args.eval:  # doesn't have annotation; args.eval should be False
             eval_kwargs = cfg.get('evaluation', {}).copy()
             # hard-code way to remove EvalHook args
             for key in [
@@ -214,6 +220,55 @@ def main():
                 eval_kwargs.pop(key, None)
             eval_kwargs.update(dict(metric=args.eval, **kwargs))
             print(dataset.evaluate(outputs, **eval_kwargs))
+
+def results2json_videoseg(dataset, results, out_file):
+    json_results = []
+    vid_objs = {}
+    # import pdb
+    # pdb.set_trace()
+    print("len dataset{len}".format(len=len(dataset)))
+    print("len result{len}".format(len=len(results)))
+    for idx in range(len(dataset)):
+      # assume results is ordered
+
+      vid_id, frame_id = dataset.img_ids[idx]
+      if idx == len(dataset) - 1 :
+        is_last = True
+      else:
+        _, frame_id_next = dataset.img_ids[idx+1]
+        is_last = frame_id_next == 0
+      # results是一个长为len(dataset)的list，每个元素是一个元组
+      det, seg = results[idx]  # tuple; len == 2
+      for obj_id in det:  # == for obj_id in det.keys()  遍历当前帧的所有实例
+        # 非空的情况下，每个det是字典，有多个实例，key为obj_id
+        bbox = det[obj_id]['bbox']
+        segm = seg[obj_id]
+        label = det[obj_id]['label']
+        if obj_id not in vid_objs:  # == in vid_objs.keys()
+          vid_objs[obj_id] = {'scores':[],'cats':[], 'segms':{}}
+        vid_objs[obj_id]['scores'].append(bbox[4])
+        vid_objs[obj_id]['cats'].append(label)
+        segm['counts'] = segm['counts'].decode()  # 从type byte解码成type str
+        vid_objs[obj_id]['segms'][frame_id] = segm
+      if is_last:
+        # store results of  the current video
+        for obj_id, obj in vid_objs.items():
+          data = dict()
+
+          data['video_id'] = vid_id + 1  # from 1 to 453 (test dataset)
+          data['score'] = np.array(obj['scores']).mean().item()
+          # majority voting for sequence category
+          data['category_id'] = np.bincount(np.array(obj['cats'])).argmax().item() + 1  # from 1
+          vid_seg = []
+          for fid in range(frame_id + 1):
+            if fid in obj['segms']:
+              vid_seg.append(obj['segms'][fid])
+            else:
+              vid_seg.append(None)
+          data['segmentations'] = vid_seg
+          json_results.append(data)
+        vid_objs = {}  #  清空
+    mmcv.dump(json_results, out_file)
 
 
 if __name__ == '__main__':

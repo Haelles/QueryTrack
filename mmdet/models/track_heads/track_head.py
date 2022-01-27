@@ -105,7 +105,8 @@ class TrackHead(nn.Module):
         # ref_x_n are the numbers of ground truth bboxes in the reference images.
         # here we compute a correlation matrix of x and ref_x
         # we also add a all 0 column denote no matching
-
+        # print(proposal_feat.shape)
+        # print(ref_proposal_feat.shape)
         proposal_feat = proposal_feat.reshape(-1, self.in_channels)
         ref_proposal_feat = ref_proposal_feat.reshape(-1, self.in_channels)
         x = self.instance_interactive_conv(

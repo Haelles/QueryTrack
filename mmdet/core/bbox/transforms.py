@@ -116,6 +116,27 @@ def bbox2result(bboxes, labels, num_classes):
             labels = labels.detach().cpu().numpy()
         return [bboxes[labels == i, :] for i in range(num_classes)]
 
+def bbox2result_with_id(bboxes, labels, obj_ids, num_classes):
+    """Convert detection results to a list of numpy arrays.
+
+    Args:
+        bboxes (Tensor): shape (n, 5)
+        labels (Tensor): shape (n, )
+        num_classes (int): class number, including background class
+
+    Returns:
+        list(ndarray): bbox results of each class
+    """
+    if bboxes.shape[0] == 0:
+        return dict()
+    else:
+        bboxes = bboxes.cpu().numpy()
+        labels = labels.cpu().numpy()
+        results={}
+        for bbox, label, obj_id in zip(bboxes, labels, obj_ids):
+          if obj_id >= 0:
+            results[obj_id]={'bbox': bbox, 'label':label}
+        return results
 
 def distance2bbox(points, distance, max_shape=None):
     """Decode distance prediction to bounding box.
