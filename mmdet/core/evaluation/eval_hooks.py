@@ -9,6 +9,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 from torch.utils.data import DataLoader
 
 from mmdet.utils import get_root_logger
+import numpy as np
 
 
 class EvalHook(Hook):
@@ -275,10 +276,62 @@ class DistEvalHook(EvalHook):
             tmpdir=tmpdir,
             gpu_collect=self.gpu_collect)
         if runner.rank == 0:
-            print('\n')
-            key_score = self.evaluate(runner, results)
-            if self.save_best:
-                self.save_best_checkpoint(runner, key_score)
+            def results2json_videoseg(dataset, results, out_file):
+                json_results = []
+                vid_objs = {}
+                # import pdb
+                # pdb.set_trace()
+                print("len dataset{len}".format(len=len(dataset)))
+                print("len result{len}".format(len=len(results)))
+                for idx in range(len(dataset)):
+                    # assume results is ordered
+                    vid_id, frame_id = dataset.img_ids[idx]
+                    if idx == len(dataset) - 1 :
+                        is_last = True
+                    else:
+                        _, frame_id_next = dataset.img_ids[idx+1]
+                        is_last = frame_id_next == 0
+                    # results是一个长为len(dataset)的list，每个元素是一个元组
+                    det, seg = results[idx]  # tuple; len == 2
+                    for obj_id in det:  # == for obj_id in det.keys()  遍历当前帧的所有实例
+                        # 非空的情况下，每个det是字典，有多个实例，key为obj_id
+                        bbox = det[obj_id]['bbox']
+                        segm = seg[obj_id]
+                        label = det[obj_id]['label']
+                        if obj_id not in vid_objs:  # == in vid_objs.keys()
+                            vid_objs[obj_id] = {'scores':[],'cats':[], 'segms':{}}
+                        vid_objs[obj_id]['scores'].append(bbox[4])
+                        vid_objs[obj_id]['cats'].append(label)
+                        segm['counts'] = segm['counts'].decode()  # 从type byte解码成type str
+                        vid_objs[obj_id]['segms'][frame_id] = segm
+                    if is_last:
+                        # store results of  the current video
+                        for obj_id, obj in vid_objs.items():
+                            data = dict()
+                            data['video_id'] = vid_id + 1  # from 1 to 453 (test dataset)
+                            data['score'] = np.array(obj['scores']).mean().item()
+                            # majority voting for sequence category
+                            data['category_id'] = np.bincount(np.array(obj['cats'])).argmax().item() + 1  # from 1
+                            vid_seg = []
+                            for fid in range(frame_id + 1):
+                                if fid in obj['segms']:
+                                    vid_seg.append(obj['segms'][fid])
+                                else:
+                                    vid_seg.append(None)
+                            data['segmentations'] = vid_seg
+                            json_results.append(data)
+                        vid_objs = {}  #  清空
+                mmcv.dump(json_results, out_file)
+
+            print('\nwriting results to results_epoch{epoch}.pkl'.format(epoch=runner._epoch))
+            mmcv.dump(results, 'results_epoch' + str(runner._epoch) + '.pkl')
+            result_file = 'results_epoch' + str(runner._epoch) + '.pkl.json'
+            results2json_videoseg(self.dataloader.dataset, results, result_file)
+            # key_score = self.evaluate(runner, results)
+            # if self.save_best:
+            #     self.save_best_checkpoint(runner, key_score)
+
+
 
     def after_train_iter(self, runner):
         if self.by_epoch or not self.every_n_iters(runner, self.interval):

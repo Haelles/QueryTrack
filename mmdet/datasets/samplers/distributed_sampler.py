@@ -16,6 +16,7 @@ class DistributedSampler(_DistributedSampler):
             dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle)
         # for the compatibility from PyTorch 1.3+
         self.seed = seed if seed is not None else 0
+        self.split_indices = [1647, 3319, 4964, 6611, 8282, 9916, 11539, 13194]
 
     def __iter__(self):
         # deterministically shuffle based on epoch
@@ -33,7 +34,10 @@ class DistributedSampler(_DistributedSampler):
         assert len(indices) == self.total_size
 
         # subsample
-        indices = indices[self.rank:self.total_size:self.num_replicas]
-        assert len(indices) == self.num_samples
-
+        # indices = indices[self.rank:self.total_size:self.num_replicas]
+        # assert len(indices) == self.num_samples
+        if self.rank != 0:
+            indices = torch.arange(self.split_indices[self.rank - 1] + 1, self.split_indices[self.rank] + 1).tolist()
+        else:
+            indices = torch.arange(0, self.split_indices[0] + 1).tolist()
         return iter(indices)

@@ -186,11 +186,11 @@ def main():
         model.CLASSES = dataset.CLASSES
 
     if not distributed:
-        model = MMDataParallel(model, device_ids=[1])
+        model = MMDataParallel(model, device_ids=[0])
         outputs = single_gpu_test(model, data_loader, args.show, args.show_dir,
                                   args.show_score_thr)
         # import pickle
-        # with open('/var/lib/docker/data/users/yupeng/tracking/QueryTrack/results.pkl', 'rb') as f:
+        # with open('/var/lib/docker/data/users/yupeng/tracking/QueryTrack/results_epoch0.pkl', 'rb') as f:
         #     outputs = pickle.load(f)
     else:
         model = MMDistributedDataParallel(

@@ -21,7 +21,9 @@ def single_gpu_test(model,
     model.eval()
     results = []
     dataset = data_loader.dataset
-    prog_bar = mmcv.ProgressBar(len(dataset))
+    # import pdb
+    # pdb.set_trace()
+    # prog_bar = mmcv.ProgressBar(len(dataset))
     for i, data in enumerate(data_loader):
         # import pdb
         # pdb.set_trace()
@@ -65,8 +67,8 @@ def single_gpu_test(model,
         #               for bbox_results, mask_results in result]
         results.append(result)
 
-        for _ in range(batch_size):
-            prog_bar.update()
+        # for _ in range(batch_size):
+        #     prog_bar.update()
     return results
 
 
@@ -100,13 +102,13 @@ def multi_gpu_test(model, data_loader, tmpdir=None, gpu_collect=False):
         with torch.no_grad():
             result = model(return_loss=False, rescale=True, **data)
             # encode mask results
-            if isinstance(result[0], tuple):
-                result = [(bbox_results, encode_mask_results(mask_results))
-                          for bbox_results, mask_results in result]
-        results.extend(result)
+            # if isinstance(result[0], tuple):
+            #     result = [(bbox_results, encode_mask_results(mask_results))
+            #               for bbox_results, mask_results in result]
+        results.append(result)
 
         if rank == 0:
-            batch_size = len(result)
+            batch_size = 1
             for _ in range(batch_size * world_size):
                 prog_bar.update()
 
@@ -146,14 +148,13 @@ def collect_results_cpu(result_part, size, tmpdir=None):
         return None
     else:
         # load results of all parts from tmp dir
-        part_list = []
+        ordered_results = []
         for i in range(world_size):
             part_file = osp.join(tmpdir, f'part_{i}.pkl')
-            part_list.append(mmcv.load(part_file))
-        # sort the results
-        ordered_results = []
-        for res in zip(*part_list):
-            ordered_results.extend(list(res))
+            part_file = mmcv.load(part_file)
+            for instance in part_file:
+                ordered_results.append(instance)
+
         # the dataloader may pad some samples
         ordered_results = ordered_results[:size]
         # remove tmp dir
